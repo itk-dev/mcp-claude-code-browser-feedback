@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo App - Browser Feedback Test</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+      padding: 40px;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      color: #1f2937;
+      margin-bottom: 8px;
+    }
+    
+    .subtitle {
+      color: #6b7280;
+      margin-bottom: 32px;
+    }
+    
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .card h2 {
+      color: #374151;
+      font-size: 18px;
+      margin-bottom: 16px;
+    }
+    
+    .form-group {
+      margin-bottom: 16px;
+    }
+    
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 6px;
+    }
+    
+    input[type="text"],
+    input[type="email"] {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: #da7756;
+      box-shadow: 0 0 0 3px rgba(218, 119, 86, 0.1);
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-primary {
+      background: #da7756;
+      color: white;
+      border: none;
+    }
+
+    .btn-primary:hover {
+      background: #c9654a;
+    }
+    
+    .btn-primary:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+    
+    /* Intentional bugs for testing */
+    .buggy-button {
+      background: #ef4444; /* Should be green */
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    
+    .misaligned {
+      margin-left: 50px; /* Intentionally misaligned */
+    }
+    
+    .hidden-error {
+      display: none;
+      color: #ef4444;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    
+    .pricing-card {
+      text-align: center;
+      padding: 32px;
+    }
+    
+    .price {
+      font-size: 48px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    
+    .price-period {
+      color: #6b7280;
+      font-size: 14px;
+    }
+    
+    .features {
+      list-style: none;
+      margin: 24px 0;
+      text-align: left;
+    }
+    
+    .features li {
+      padding: 8px 0;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 14px;
+      color: #4b5563;
+    }
+    
+    .features li:last-child {
+      border-bottom: none;
+    }
+    
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    
+    .alert-warning {
+      background: #fef3c7;
+      color: #92400e;
+      border: 1px solid #fcd34d;
+    }
+    
+    .instructions {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 32px;
+    }
+    
+    .instructions h3 {
+      color: #1e40af;
+      margin-bottom: 12px;
+    }
+    
+    .instructions ol {
+      margin-left: 20px;
+      color: #1e40af;
+    }
+    
+    .instructions li {
+      margin-bottom: 8px;
+    }
+    
+    .instructions code {
+      background: #dbeafe;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 Demo App</h1>
+    <p class="subtitle">Test the Claude Code Browser Feedback Widget</p>
+    
+    <div class="instructions">
+      <h3>How to Test</h3>
+      <ol>
+        <li>Look for the <strong>Add annotation</strong> button in the bottom-right corner</li>
+        <li>Click it to enter annotation mode</li>
+        <li>Hover over elements - they'll highlight in orange</li>
+        <li>Click on an element you want to report</li>
+        <li>Add a description and click "Send to Claude"</li>
+      </ol>
+      <p style="margin-top: 12px; font-size: 13px;">
+        <strong>Note:</strong> The button appears gray if the MCP server isn't running.
+        Start it with: <code>node src/server.js</code>
+      </p>
+    </div>
+    
+    <!-- Intentional issues for testing -->
+    
+    <div class="card">
+      <h2>🐛 Bug #1: Wrong Button Color</h2>
+      <p style="margin-bottom: 16px; color: #6b7280;">This button should be green, but it's red.</p>
+      <button class="buggy-button">Complete Purchase</button>
+    </div>
+    
+    <div class="card">
+      <h2>🐛 Bug #2: Misaligned Element</h2>
+      <p style="margin-bottom: 16px; color: #6b7280;">This button is misaligned from the others.</p>
+      <div>
+        <button class="btn btn-primary">Normal Button</button>
+        <button class="btn btn-primary misaligned">Misaligned Button</button>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h2>🐛 Bug #3: Form with Console Error</h2>
+      <p style="margin-bottom: 16px; color: #6b7280;">This form throws an error when submitted.</p>
+      <form id="buggy-form">
+        <div class="form-group">
+          <label for="email">Email Address</label>
+          <input type="email" id="email" placeholder="you@example.com" />
+        </div>
+        <button type="submit" class="btn btn-primary">Subscribe</button>
+        <div class="hidden-error" id="form-error">Something went wrong!</div>
+      </form>
+    </div>
+    
+    <div class="card pricing-card">
+      <h2>🐛 Bug #4: Wrong Price Display</h2>
+      <p style="margin-bottom: 16px; color: #6b7280;">The price format is incorrect.</p>
+      <div class="price">$9.99999</div>
+      <div class="price-period">per month (should show $9.99)</div>
+      <ul class="features">
+        <li>✓ Feature one</li>
+        <li>✓ Feature two</li>
+        <li>✓ Feature three</li>
+      </ul>
+      <button class="btn btn-primary" disabled>Select Plan</button>
+    </div>
+    
+    <div class="alert alert-warning">
+      ⚠️ This is a demo page with intentional bugs for testing the feedback widget.
+    </div>
+  </div>
+  
+  <!-- Buggy JavaScript for console errors -->
+  <script>
+    // Generate some console logs for testing
+    console.log('App initialized');
+    console.warn('This is a warning message');
+    
+    // Form with intentional error
+    document.getElementById('buggy-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      // Intentional error
+      try {
+        const user = null;
+        console.log('Processing for:', user.email); // This will throw
+      } catch (err) {
+        console.error('Form submission failed:', err.message);
+        document.getElementById('form-error').style.display = 'block';
+      }
+    });
+    
+    // Simulate some async errors
+    setTimeout(() => {
+      console.log('Checking for updates...');
+    }, 1000);
+    
+    setTimeout(() => {
+      console.warn('Session will expire in 5 minutes');
+    }, 2000);
+  </script>
+  
+  <!-- Load the feedback widget -->
+  <!-- For better screenshots, optionally include html2canvas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  
+  <!-- The widget script - served by the MCP server -->
+  <script src="http://localhost:9877/widget.js"></script>
+</body>
+</html>

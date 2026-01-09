@@ -1,0 +1,37 @@
+{
+  "name": "mcp-claude-code-browser-feedback",
+  "version": "0.1.0",
+  "description": "MCP server for collecting visual browser feedback and sending to Claude Code",
+  "type": "module",
+  "main": "src/server.js",
+  "bin": {
+    "browser-feedback-mcp": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yepzdk/mcp-claude-code-browser-feedback.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yepzdk/mcp-claude-code-browser-feedback/issues"
+  },
+  "homepage": "https://github.com/yepzdk/mcp-claude-code-browser-feedback#readme",
+  "author": "yepzdk",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.16.0"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "feedback",
+    "browser",
+    "annotation",
+    "debugging",
+    "model-context-protocol"
+  ],
+  "license": "MIT"
+}
