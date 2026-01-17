@@ -839,10 +839,17 @@
 
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Escape to cancel annotation mode
-      if (e.key === 'Escape' && isAnnotationMode) {
-        stopAnnotationMode();
-        return;
+      // Escape to cancel annotation mode or close panel
+      if (e.key === 'Escape') {
+        const panel = document.getElementById(`${WIDGET_ID}-panel`);
+        if (panel && panel.classList.contains('active')) {
+          hidePanel();
+          return;
+        }
+        if (isAnnotationMode) {
+          stopAnnotationMode();
+          return;
+        }
       }
 
       // Shift+C to start annotation mode
