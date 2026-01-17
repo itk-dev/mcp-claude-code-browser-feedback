@@ -32,6 +32,11 @@
   let consoleLogs = [];
   let networkErrors = [];
 
+  // Platform detection for keyboard shortcuts
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  const modifierKey = isMac ? 'metaKey' : 'ctrlKey';
+  const modifierSymbol = isMac ? '⌘' : 'Ctrl+';
+
   // ============================================
   // Console Log Capture
   // ============================================
@@ -106,6 +111,15 @@
     #${WIDGET_ID}-button:hover {
       transform: translateY(-2px);
       box-shadow: 0 6px 16px rgba(218, 119, 86, 0.5);
+    }
+
+    #${WIDGET_ID}-button .shortcut-hint {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-left: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
     }
 
     #${WIDGET_ID}-button.disconnected {
@@ -369,6 +383,12 @@
       transform: none;
     }
 
+    #${WIDGET_ID}-send-btn .shortcut-hint {
+      font-size: 11px;
+      opacity: 0.7;
+      margin-left: 6px;
+    }
+
     #${WIDGET_ID}-instructions {
       position: fixed;
       top: 20px;
@@ -481,6 +501,7 @@
           <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H4.104v-.08l2.878-1.17-.107-.312h-.063L3.87 12.802v-.064l6.048-3.318V9.3L4.14 6.622l.064-.064 4.848 1.336.063-.063-.08-.392L4.66 3.893 8.34 5.58l.312-.072V5.34L6.35 2.766l2.374 1.68.08-.064-.032-.44L6.83.782 9.3 3.67l.12-.048.064-3.59h.064l.663 3.222.168.056L12.12.614v.064l-.92 3.406.072.128h.08L14.12.766v.08l-1.92 3.83.064.104 3.63-2.63-.064.08-2.35 3.734.04.12.128.024 3.934-1.4-.08.08-3.07 2.63v.08l.112.063 3.83-.92-.064.08-3.35 1.6v.04l.12.128 3.566.128-.08.064-3.606.695-.064.136.032.048 3.83 1.4-.08.048-3.83-.015-.128.104-.008.072 3.35 2.446-.08.032-3.59-1.344-.12.064-.04.104 2.342 3.35-.08.016-2.998-2.566-.088.056-.128.168.87 3.95h-.08l-1.664-3.35-.112-.04-.08.04-.6 4.12h-.064l.12-3.862-.12-.136-.088.008-1.92 3.398-.048-.064.84-3.83-.072-.12-.136-.024-2.566 2.998-.032-.08 1.824-3.59-.056-.128-.104-.024-3.19 1.824.048-.08 2.566-2.87-.048-.127-.12-.016-3.67.463z"/>
         </svg>
         <span>Add annotation</span>
+        <span class="shortcut-hint" id="${WIDGET_ID}-button-shortcut" style="display: none;">Shift+C</span>
       </button>
       
       <div id="${WIDGET_ID}-overlay"></div>
@@ -523,7 +544,7 @@
           </div>
           <div id="${WIDGET_ID}-actions">
             <button id="${WIDGET_ID}-cancel-btn">Cancel</button>
-            <button id="${WIDGET_ID}-send-btn">Send to Claude</button>
+            <button id="${WIDGET_ID}-send-btn">Send to Claude<span class="shortcut-hint">${modifierSymbol}↵</span></button>
           </div>
         </div>
       </div>
@@ -689,8 +710,12 @@
 
   function updateButtonState() {
     const button = document.getElementById(`${WIDGET_ID}-button`);
+    const shortcutHint = document.getElementById(`${WIDGET_ID}-button-shortcut`);
     if (button) {
       button.classList.toggle('disconnected', !isConnected);
+    }
+    if (shortcutHint) {
+      shortcutHint.style.display = isConnected ? 'inline' : 'none';
     }
   }
 
@@ -812,10 +837,33 @@
       showPanel();
     });
 
-    // Escape key to cancel
+    // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
+      // Escape to cancel annotation mode
       if (e.key === 'Escape' && isAnnotationMode) {
         stopAnnotationMode();
+        return;
+      }
+
+      // Shift+C to start annotation mode
+      if (e.key === 'C' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // Don't trigger when typing in input fields
+        const isInputFocused = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)
+          || document.activeElement.isContentEditable;
+
+        if (!isInputFocused && isConnected && !isAnnotationMode) {
+          e.preventDefault();
+          startAnnotationMode();
+        }
+      }
+    });
+
+    // Cmd/Ctrl+Enter to send feedback from description textarea
+    const descriptionTextarea = document.getElementById(`${WIDGET_ID}-description`);
+    descriptionTextarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e[modifierKey]) {
+        e.preventDefault();
+        sendFeedback();
       }
     });
 
