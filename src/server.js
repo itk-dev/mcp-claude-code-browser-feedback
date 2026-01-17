@@ -306,9 +306,9 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "Project directory to search for configuration files. Defaults to current working directory.",
             },
-            detect_only: {
+            open: {
               type: "boolean",
-              description: "If true, only detect and return the URL without opening the browser. Defaults to false.",
+              description: "If true, open the URL in the default browser. Defaults to false (just returns the URL).",
               default: false,
             },
           },
@@ -788,7 +788,7 @@ The widget only loads in development (localhost) by default.
 
     case "open_in_browser": {
       const projectDir = args?.project_dir || process.cwd();
-      const detectOnly = args?.detect_only === true;
+      const shouldOpen = args?.open === true;
       let url = args?.url;
       let detectedFrom = null;
 
@@ -898,8 +898,8 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      // If detect_only, just return the URL
-      if (detectOnly) {
+      // If not opening, just return the URL
+      if (!shouldOpen) {
         return {
           content: [{
             type: "text",
