@@ -167,13 +167,18 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Path to the HTML file to inject the widget into. If not provided, will attempt to auto-detect common entry points in the current directory.",
             },
             project_dir: {
-              type: "string", 
+              type: "string",
               description: "Project directory to search for HTML files. Defaults to current working directory.",
             },
             dev_only: {
               type: "boolean",
-              description: "If true, wraps the script in a localhost check so it only loads in development. Defaults to true.",
+              description: "If true, wraps the script in a hostname check so it only loads in development. Defaults to true.",
               default: true,
+            },
+            allowed_hostnames: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of hostnames or patterns allowed when dev_only is true. Supports exact matches (e.g., 'localhost') and wildcard patterns (e.g., '*.local.itkdev.dk', '*.local.*'). Defaults to common local dev patterns: localhost, 127.0.0.1, *.local, *.local.*, *.test, *.dev, *.ddev.site",
             },
           },
           required: [],
@@ -299,6 +304,18 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       const projectDir = args?.project_dir || process.cwd();
       let filePath = args?.file_path;
 
+      // Default hostname patterns for local development
+      const defaultHostnamePatterns = [
+        'localhost',
+        '127.0.0.1',
+        '*.local',
+        '*.local.*',
+        '*.test',
+        '*.dev',
+        '*.ddev.site',
+      ];
+      const allowedHostnames = args?.allowed_hostnames || defaultHostnamePatterns;
+
       // Auto-detect HTML file if not specified
       if (!filePath) {
         const candidates = [
@@ -361,15 +378,28 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Generate script tag
       let scriptTag;
       if (devOnly) {
+        // Convert glob patterns to regex patterns for browser-side matching
+        const patternChecks = allowedHostnames.map(pattern => {
+          // Escape special regex chars except *
+          const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+          // Convert * to regex pattern (match any chars except dots for single *, any chars for **)
+          const regexPattern = escaped.replace(/\\\*/g, '[^.]*');
+          return `/${'^' + regexPattern + '$'}/i.test(h)`;
+        });
+
         scriptTag = `
 <!-- Claude Code Browser Feedback Widget (dev only) -->
 <script>
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-    var s = document.createElement('script');
-    s.src = 'http://localhost:${PORT}/widget.js';
-    s.id = 'claude-feedback-widget-script';
-    document.body.appendChild(s);
-  }
+  (function() {
+    var h = location.hostname;
+    var isDevHost = ${patternChecks.join(' || ')};
+    if (isDevHost) {
+      var s = document.createElement('script');
+      s.src = 'http://localhost:${PORT}/widget.js';
+      s.id = 'claude-feedback-widget-script';
+      document.body.appendChild(s);
+    }
+  })();
 </script>`;
       } else {
         scriptTag = `
@@ -395,13 +425,17 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Write back
       fs.writeFileSync(filePath, content, 'utf8');
 
+      const hostnameInfo = devOnly
+        ? `Development only (allowed hostnames: ${allowedHostnames.join(', ')})`
+        : 'Always loaded';
+
       return {
         content: [{
           type: "text",
           text: `✅ Widget installed successfully!
 
 **File:** ${filePath}
-**Mode:** ${devOnly ? 'Development only (localhost)' : 'Always loaded'}
+**Mode:** ${hostnameInfo}
 
 The floating "🎯 Report Issue" button will appear when you load the page.
 
