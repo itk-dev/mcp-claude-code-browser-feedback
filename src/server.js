@@ -11,6 +11,7 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { execFile } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -288,6 +289,30 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["message"],
+        },
+      },
+      {
+        name: "open_in_browser",
+        description:
+          "Open the project in the default browser. Automatically detects the project URL from common configuration files (.env, docker-compose.yml, etc.) or accepts an explicit URL. Can also just return the detected URL without opening.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            url: {
+              type: "string",
+              description: "Explicit URL to open. If not provided, will attempt to detect from project configuration.",
+            },
+            project_dir: {
+              type: "string",
+              description: "Project directory to search for configuration files. Defaults to current working directory.",
+            },
+            open: {
+              type: "boolean",
+              description: "If true, open the URL in the default browser. Defaults to false (just returns the URL).",
+              default: false,
+            },
+          },
+          required: [],
         },
       },
     ],
@@ -734,7 +759,7 @@ The widget only loads in development (localhost) by default.
 
     case "request_annotation": {
       const message = args?.message || "Please annotate the issue you'd like to report.";
-      
+
       if (connectedClients.size === 0) {
         return {
           content: [
@@ -759,6 +784,170 @@ The widget only loads in development (localhost) by default.
           },
         ],
       };
+    }
+
+    case "open_in_browser": {
+      const projectDir = args?.project_dir || process.cwd();
+      const shouldOpen = args?.open === true;
+      let url = args?.url;
+      let detectedFrom = null;
+
+      // If no URL provided, try to detect from config files
+      if (!url) {
+        // Detection strategies in order of priority
+        const detectionStrategies = [
+          // .env file patterns
+          {
+            file: '.env',
+            patterns: [
+              /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
+              /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
+            ],
+            transform: (match) => {
+              const value = match[1];
+              // Add protocol if missing
+              if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                return `https://${value}`;
+              }
+              return value;
+            },
+          },
+          // .env.local file patterns
+          {
+            file: '.env.local',
+            patterns: [
+              /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
+              /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
+            ],
+            transform: (match) => {
+              const value = match[1];
+              if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                return `https://${value}`;
+              }
+              return value;
+            },
+          },
+          // docker-compose.yml patterns
+          {
+            file: 'docker-compose.yml',
+            patterns: [
+              /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
+              /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
+            ],
+            transform: (match) => {
+              const value = match[1];
+              if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                return `https://${value}`;
+              }
+              return value;
+            },
+          },
+          // docker-compose.override.yml patterns
+          {
+            file: 'docker-compose.override.yml',
+            patterns: [
+              /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
+              /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
+            ],
+            transform: (match) => {
+              const value = match[1];
+              if (!value.startsWith('http://') && !value.startsWith('https://')) {
+                return `https://${value}`;
+              }
+              return value;
+            },
+          },
+          // package.json homepage or proxy
+          {
+            file: 'package.json',
+            patterns: [
+              /"homepage"\s*:\s*"([^"]+)"/,
+              /"proxy"\s*:\s*"([^"]+)"/,
+            ],
+            transform: (match) => match[1],
+          },
+        ];
+
+        for (const strategy of detectionStrategies) {
+          const filePath = path.join(projectDir, strategy.file);
+          if (fs.existsSync(filePath)) {
+            try {
+              const content = fs.readFileSync(filePath, 'utf8');
+              for (const pattern of strategy.patterns) {
+                const match = content.match(pattern);
+                if (match) {
+                  url = strategy.transform(match);
+                  detectedFrom = strategy.file;
+                  break;
+                }
+              }
+              if (url) break;
+            } catch (err) {
+              // Continue to next strategy
+            }
+          }
+        }
+
+        if (!url) {
+          return {
+            content: [{
+              type: "text",
+              text: `Could not detect project URL in ${projectDir}.\n\nSearched in:\n- .env (APP_URL, BASE_URL, SITE_URL, VIRTUAL_HOST, etc.)\n- .env.local\n- docker-compose.yml (VIRTUAL_HOST, traefik labels)\n- docker-compose.override.yml\n- package.json (homepage, proxy)\n\nPlease provide an explicit URL using the 'url' parameter.`,
+            }],
+          };
+        }
+      }
+
+      // If not opening, just return the URL
+      if (!shouldOpen) {
+        return {
+          content: [{
+            type: "text",
+            text: detectedFrom
+              ? `Detected URL: ${url}\nSource: ${detectedFrom}`
+              : `URL: ${url}`,
+          }],
+        };
+      }
+
+      // Open in browser based on platform using execFile (safer than exec)
+      const platform = process.platform;
+      let command;
+      let commandArgs;
+
+      if (platform === 'darwin') {
+        command = 'open';
+        commandArgs = [url];
+      } else if (platform === 'win32') {
+        command = 'cmd';
+        commandArgs = ['/c', 'start', '', url];
+      } else {
+        // Linux and others
+        command = 'xdg-open';
+        commandArgs = [url];
+      }
+
+      return new Promise((resolve) => {
+        execFile(command, commandArgs, (error) => {
+          if (error) {
+            resolve({
+              content: [{
+                type: "text",
+                text: `Failed to open browser: ${error.message}\n\nURL: ${url}\n\nYou can open it manually.`,
+              }],
+            });
+          } else {
+            resolve({
+              content: [{
+                type: "text",
+                text: detectedFrom
+                  ? `Opened ${url} in your default browser.\n\nDetected from: ${detectedFrom}`
+                  : `Opened ${url} in your default browser.`,
+              }],
+            });
+          }
+        });
+      });
     }
 
     default:
