@@ -423,6 +423,21 @@
       animation: slideIn 0.3s ease;
     }
 
+    #${WIDGET_ID}-error {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #ef4444;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 2147483647;
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+
     #${WIDGET_ID}-multi-bar {
       position: fixed;
       bottom: 80px;
@@ -535,7 +550,7 @@
           <div id="${WIDGET_ID}-options">
             <label>
               <input type="checkbox" id="${WIDGET_ID}-include-logs" checked />
-              Include console logs (${consoleLogs.length} captured)
+              <span id="${WIDGET_ID}-include-logs-text">Include console logs (${consoleLogs.length} captured)</span>
             </label>
             <label>
               <input type="checkbox" id="${WIDGET_ID}-include-styles" checked />
@@ -550,6 +565,7 @@
       </div>
       
       <div id="${WIDGET_ID}-success">✓ Feedback sent to Claude!</div>
+      <div id="${WIDGET_ID}-error"></div>
 
       <div id="${WIDGET_ID}-multi-bar">
         <span class="count" id="${WIDGET_ID}-multi-count">0</span>
@@ -913,19 +929,26 @@
   }
 
   function finishMultiFeedback() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    // Send done signal to server
-    ws.send(JSON.stringify({
-      type: 'feedback_batch_complete',
-      count: multiFeedbackCount,
-    }));
-
-    // Reset state
+    // Reset state first (even if send fails)
     isMultiFeedbackMode = false;
+    const count = multiFeedbackCount;
     multiFeedbackCount = 0;
-    document.getElementById(`${WIDGET_ID}-multi-bar`).classList.remove('active');
+
+    const multiBar = document.getElementById(`${WIDGET_ID}-multi-bar`);
+    if (multiBar) multiBar.classList.remove('active');
     stopAnnotationMode();
+
+    // Try to send done signal to server
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          type: 'feedback_batch_complete',
+          count: count,
+        }));
+      } catch (err) {
+        console.error('[Claude Feedback] Failed to send batch complete:', err);
+      }
+    }
   }
 
   async function showPanel() {
@@ -933,24 +956,29 @@
     const screenshotEl = document.getElementById(`${WIDGET_ID}-screenshot-preview`);
     const elementInfoEl = document.getElementById(`${WIDGET_ID}-element-info`);
     const elementInfoWrapper = document.getElementById(`${WIDGET_ID}-element-info-wrapper`);
-    const logsCheckbox = document.getElementById(`${WIDGET_ID}-include-logs`);
     const minimizeBtn = document.getElementById(`${WIDGET_ID}-panel-minimize`);
+
+    // Defensive check - ensure panel exists
+    if (!panel) {
+      console.error('[Claude Feedback] Panel element not found');
+      return;
+    }
 
     // Reset panel position and state
     panel.style.top = '20px';
     panel.style.right = '20px';
     panel.style.left = 'auto';
     panel.classList.remove('minimized');
-    minimizeBtn.textContent = '−';
+    if (minimizeBtn) minimizeBtn.textContent = '−';
 
     // Reset element info to collapsed
-    elementInfoWrapper.classList.remove('expanded');
+    if (elementInfoWrapper) elementInfoWrapper.classList.remove('expanded');
 
-    // Update logs count
-    logsCheckbox.parentElement.innerHTML = `
-      <input type="checkbox" id="${WIDGET_ID}-include-logs" checked />
-      Include console logs (${consoleLogs.length} captured)
-    `;
+    // Update logs count text (preserve checkbox state)
+    const logsText = document.getElementById(`${WIDGET_ID}-include-logs-text`);
+    if (logsText) {
+      logsText.textContent = `Include console logs (${consoleLogs.length} captured)`;
+    }
 
     // Show element info
     if (selectedElement) {
@@ -981,19 +1009,44 @@
   }
 
   async function sendFeedback() {
-    if (!selectedElement || !ws || ws.readyState !== WebSocket.OPEN) return;
-    
-    const description = document.getElementById(`${WIDGET_ID}-description`).value;
-    const includeLogs = document.getElementById(`${WIDGET_ID}-include-logs`).checked;
-    const includeStyles = document.getElementById(`${WIDGET_ID}-include-styles`).checked;
-    
+    // Validate we have an element selected
+    if (!selectedElement) {
+      console.warn('[Claude Feedback] No element selected');
+      return;
+    }
+
+    // Check WebSocket connection
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[Claude Feedback] WebSocket not connected, attempting reconnect...');
+      showError('Connection lost. Reconnecting...');
+
+      // Try to reconnect
+      if (!ws || ws.readyState === WebSocket.CLOSED) {
+        connectWebSocket();
+      }
+
+      // Wait a bit for reconnection, then retry once
+      setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          sendFeedback();
+        } else {
+          showError('Could not reconnect. Please try again.');
+        }
+      }, 1000);
+      return;
+    }
+
+    const description = document.getElementById(`${WIDGET_ID}-description`)?.value || '';
+    const includeLogs = document.getElementById(`${WIDGET_ID}-include-logs`)?.checked ?? true;
+    const includeStyles = document.getElementById(`${WIDGET_ID}-include-styles`)?.checked ?? true;
+
     const elementInfo = getElementInfo(selectedElement);
     if (!includeStyles) {
       delete elementInfo.computedStyles;
     }
-    
+
     const screenshot = await captureScreenshot();
-    
+
     const feedback = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2),
       timestamp: new Date().toISOString(),
@@ -1009,26 +1062,47 @@
       screenshot: screenshot,
       consoleLogs: includeLogs ? consoleLogs.slice(-20) : [],
     };
-    
-    ws.send(JSON.stringify({
-      type: 'feedback',
-      payload: feedback,
-    }));
 
-    hidePanel();
+    try {
+      ws.send(JSON.stringify({
+        type: 'feedback',
+        payload: feedback,
+      }));
 
-    // In multi-feedback mode, restart annotation mode for next item
-    if (isMultiFeedbackMode) {
-      setTimeout(() => startAnnotationMode(), 300);
+      hidePanel();
+
+      // In multi-feedback mode, restart annotation mode for next item
+      if (isMultiFeedbackMode) {
+        setTimeout(() => startAnnotationMode(), 300);
+      }
+    } catch (err) {
+      console.error('[Claude Feedback] Failed to send feedback:', err);
+      showError('Failed to send feedback. Please try again.');
     }
   }
 
   function showSuccess() {
     const el = document.getElementById(`${WIDGET_ID}-success`);
-    el.style.display = 'block';
-    setTimeout(() => {
-      el.style.display = 'none';
-    }, 3000);
+    if (el) {
+      el.style.display = 'block';
+      setTimeout(() => {
+        el.style.display = 'none';
+      }, 3000);
+    }
+  }
+
+  function showError(message) {
+    const el = document.getElementById(`${WIDGET_ID}-error`);
+    if (el) {
+      el.textContent = '✗ ' + message;
+      el.style.display = 'block';
+      setTimeout(() => {
+        el.style.display = 'none';
+      }, 4000);
+    } else {
+      // Fallback to console if element doesn't exist
+      console.error('[Claude Feedback]', message);
+    }
   }
 
   function showNotification(message) {
