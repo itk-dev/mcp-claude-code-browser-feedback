@@ -24,6 +24,30 @@ let feedbackResolvers = []; // Promises waiting for feedback
 let connectedClients = new Set();
 let isHttpServerOwner = false; // Track if this instance owns the HTTP server
 
+// Helper to generate pending feedback summary (without full payloads)
+function getPendingSummary() {
+  return {
+    count: pendingFeedback.length,
+    items: pendingFeedback.map(f => ({
+      id: f.id,
+      timestamp: f.timestamp || f.receivedAt,
+      description: f.description ? f.description.slice(0, 100) : '',
+      selector: f.element?.selector || '',
+    })),
+  };
+}
+
+// Broadcast pending status to all connected clients
+function broadcastPendingStatus() {
+  const status = getPendingSummary();
+  const message = JSON.stringify({ type: 'pending_status', ...status });
+  for (const client of connectedClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
+
 // Helper to fetch status from the running HTTP server
 async function fetchServerStatus() {
   try {
@@ -82,6 +106,34 @@ async function broadcastViaHttp(message) {
   return null;
 }
 
+// Helper to fetch pending summary from the running HTTP server
+async function fetchPendingSummary() {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/pending-summary`);
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    // Server not running or not reachable
+  }
+  return null;
+}
+
+// Helper to delete feedback via the running HTTP server
+async function deleteFeedbackViaHttp(id) {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/feedback/${id}`, {
+      method: 'DELETE',
+    });
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    // Server not running or not reachable
+  }
+  return null;
+}
+
 // ============================================
 // HTTP Server - serves widget.js
 // ============================================
@@ -89,7 +141,7 @@ async function broadcastViaHttp(message) {
 const httpServer = http.createServer((req, res) => {
   // CORS headers for cross-origin requests
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -138,9 +190,37 @@ const httpServer = http.createServer((req, res) => {
     const feedback = [...pendingFeedback];
     if (shouldClear) {
       pendingFeedback = [];
+      broadcastPendingStatus();
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ feedback }));
+    return;
+  }
+
+  // GET /pending-summary - get summary of pending feedback without full payloads
+  if (urlObj.pathname === "/pending-summary" && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(getPendingSummary()));
+    return;
+  }
+
+  // DELETE /feedback/:id - remove a specific pending feedback item
+  const deleteMatch = urlObj.pathname.match(/^\/feedback\/([^/]+)$/);
+  if (deleteMatch && req.method === "DELETE") {
+    const idToDelete = deleteMatch[1];
+    const initialLength = pendingFeedback.length;
+    pendingFeedback = pendingFeedback.filter(f => f.id !== idToDelete);
+    const deleted = pendingFeedback.length < initialLength;
+
+    if (deleted) {
+      broadcastPendingStatus();
+    }
+
+    res.writeHead(deleted ? 200 : 404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      success: deleted,
+      message: deleted ? 'Feedback deleted' : 'Feedback not found'
+    }));
     return;
   }
 
@@ -191,28 +271,54 @@ wss.on("connection", (ws) => {
   // Send connection confirmation
   ws.send(JSON.stringify({ type: "connected", message: "Connected to Claude Code feedback server" }));
 
+  // Send current pending status to newly connected client
+  const status = getPendingSummary();
+  ws.send(JSON.stringify({ type: 'pending_status', ...status }));
+
   ws.on("message", (data) => {
     try {
       const message = JSON.parse(data.toString());
-      
+
       if (message.type === "feedback") {
         console.error(`[browser-feedback-mcp] Received feedback from browser`);
-        
+
         const feedback = {
           ...message.payload,
           receivedAt: new Date().toISOString(),
         };
-        
+
         pendingFeedback.push(feedback);
-        
+
         // Resolve any waiting promises
         while (feedbackResolvers.length > 0) {
           const resolver = feedbackResolvers.shift();
           resolver(feedback);
         }
-        
+
         // Acknowledge receipt
         ws.send(JSON.stringify({ type: "feedback_received", id: feedback.id }));
+
+        // Broadcast updated pending status to all clients
+        broadcastPendingStatus();
+      }
+
+      if (message.type === "delete_feedback") {
+        const idToDelete = message.id;
+        const initialLength = pendingFeedback.length;
+        pendingFeedback = pendingFeedback.filter(f => f.id !== idToDelete);
+        const deleted = pendingFeedback.length < initialLength;
+
+        if (deleted) {
+          console.error(`[browser-feedback-mcp] Deleted feedback: ${idToDelete}`);
+          // Broadcast updated pending status to all clients
+          broadcastPendingStatus();
+        }
+
+        ws.send(JSON.stringify({
+          type: "feedback_deleted",
+          id: idToDelete,
+          success: deleted,
+        }));
       }
     } catch (err) {
       console.error("[browser-feedback-mcp] Error parsing message:", err);
@@ -343,6 +449,31 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: [],
+        },
+      },
+      {
+        name: "preview_pending_feedback",
+        description:
+          "Preview all pending feedback without consuming it. Use this to see what feedback has been submitted without clearing the queue. Returns summaries of pending items (id, timestamp, description, selector). The browser widget also shows this information.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "delete_pending_feedback",
+        description:
+          "Delete a specific pending feedback item by ID. Use this when a user wants to remove feedback they submitted by mistake or that is no longer relevant.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description: "The ID of the feedback item to delete",
+            },
+          },
+          required: ["id"],
         },
       },
       {
@@ -728,6 +859,7 @@ The widget only loads in development (localhost) by default.
       // Check if there's already pending feedback
       if (pendingFeedback.length > 0) {
         const feedback = pendingFeedback.shift();
+        broadcastPendingStatus();
         return {
           content: [
             {
@@ -801,6 +933,9 @@ The widget only loads in development (localhost) by default.
       const feedback = [...pendingFeedback];
       if (shouldClear) {
         pendingFeedback = [];
+        if (feedback.length > 0) {
+          broadcastPendingStatus();
+        }
       }
 
       if (feedback.length === 0) {
@@ -819,6 +954,122 @@ The widget only loads in development (localhost) by default.
           {
             type: "text",
             text: JSON.stringify(feedback, null, 2),
+          },
+        ],
+      };
+    }
+
+    case "preview_pending_feedback": {
+      // If we don't own the HTTP server, fetch via HTTP
+      if (!isHttpServerOwner) {
+        const result = await fetchPendingSummary();
+        if (result) {
+          if (result.count === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No pending feedback.",
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Could not fetch feedback. Is the feedback server running?",
+              },
+            ],
+          };
+        }
+      }
+
+      const summary = getPendingSummary();
+      if (summary.count === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No pending feedback.",
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(summary, null, 2),
+          },
+        ],
+      };
+    }
+
+    case "delete_pending_feedback": {
+      const id = args?.id;
+      if (!id) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: id is required",
+            },
+          ],
+        };
+      }
+
+      // If we don't own the HTTP server, delete via HTTP
+      if (!isHttpServerOwner) {
+        const result = await deleteFeedbackViaHttp(id);
+        if (result) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: result.success
+                  ? `Feedback ${id} deleted successfully.`
+                  : `Feedback ${id} not found.`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Could not delete feedback. Is the feedback server running?",
+              },
+            ],
+          };
+        }
+      }
+
+      const initialLength = pendingFeedback.length;
+      pendingFeedback = pendingFeedback.filter(f => f.id !== id);
+      const deleted = pendingFeedback.length < initialLength;
+
+      if (deleted) {
+        broadcastPendingStatus();
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: deleted
+              ? `Feedback ${id} deleted successfully.`
+              : `Feedback ${id} not found.`,
           },
         ],
       };
