@@ -31,6 +31,8 @@
   let selectedElement = null;
   let consoleLogs = [];
   let networkErrors = [];
+  let pendingItems = [];
+  let isPendingQueueOpen = false;
 
   // Platform detection for keyboard shortcuts
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -89,10 +91,7 @@
     }
 
     #${WIDGET_ID}-button {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 2147483647;
+      position: relative;
       background: linear-gradient(135deg, #da7756 0%, #e78d6d 100%);
       color: white;
       border: none;
@@ -129,6 +128,155 @@
 
     #${WIDGET_ID}-button .claude-icon {
       flex-shrink: 0;
+    }
+
+    #${WIDGET_ID}-pending-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: #ef4444;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      min-width: 20px;
+      height: 20px;
+      border-radius: 10px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 0 6px;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      border: 2px solid white;
+    }
+
+    #${WIDGET_ID}-pending-badge.has-items {
+      display: flex;
+    }
+
+    #${WIDGET_ID}-pending-badge:hover {
+      transform: scale(1.1);
+    }
+
+    #${WIDGET_ID}-queue-panel {
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      width: 320px;
+      max-width: 90vw;
+      max-height: 300px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+      z-index: 2147483646;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #${WIDGET_ID}-queue-panel.active {
+      display: flex;
+    }
+
+    #${WIDGET_ID}-queue-header {
+      background: #f3f4f6;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    #${WIDGET_ID}-queue-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    #${WIDGET_ID}-queue-close {
+      background: none;
+      border: none;
+      color: #6b7280;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px;
+      line-height: 1;
+    }
+
+    #${WIDGET_ID}-queue-close:hover {
+      color: #374151;
+    }
+
+    #${WIDGET_ID}-queue-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 8px 0;
+    }
+
+    #${WIDGET_ID}-queue-empty {
+      padding: 24px;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 13px;
+    }
+
+    .${WIDGET_ID}-queue-item {
+      padding: 10px 16px;
+      border-bottom: 1px solid #f3f4f6;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .${WIDGET_ID}-queue-item:last-child {
+      border-bottom: none;
+    }
+
+    .${WIDGET_ID}-queue-item-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .${WIDGET_ID}-queue-item-selector {
+      font-family: monospace;
+      font-size: 11px;
+      color: #6b7280;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .${WIDGET_ID}-queue-item-description {
+      font-size: 13px;
+      color: #374151;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .${WIDGET_ID}-queue-item-time {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+
+    .${WIDGET_ID}-queue-item-delete {
+      background: none;
+      border: none;
+      color: #9ca3af;
+      cursor: pointer;
+      padding: 4px;
+      font-size: 14px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .${WIDGET_ID}-queue-item-delete:hover {
+      color: #ef4444;
     }
 
     #${WIDGET_ID}-overlay {
@@ -511,14 +659,27 @@
     const container = document.createElement('div');
     container.id = WIDGET_ID;
     container.innerHTML = `
-      <button id="${WIDGET_ID}-button" class="disconnected">
-        <svg class="claude-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H4.104v-.08l2.878-1.17-.107-.312h-.063L3.87 12.802v-.064l6.048-3.318V9.3L4.14 6.622l.064-.064 4.848 1.336.063-.063-.08-.392L4.66 3.893 8.34 5.58l.312-.072V5.34L6.35 2.766l2.374 1.68.08-.064-.032-.44L6.83.782 9.3 3.67l.12-.048.064-3.59h.064l.663 3.222.168.056L12.12.614v.064l-.92 3.406.072.128h.08L14.12.766v.08l-1.92 3.83.064.104 3.63-2.63-.064.08-2.35 3.734.04.12.128.024 3.934-1.4-.08.08-3.07 2.63v.08l.112.063 3.83-.92-.064.08-3.35 1.6v.04l.12.128 3.566.128-.08.064-3.606.695-.064.136.032.048 3.83 1.4-.08.048-3.83-.015-.128.104-.008.072 3.35 2.446-.08.032-3.59-1.344-.12.064-.04.104 2.342 3.35-.08.016-2.998-2.566-.088.056-.128.168.87 3.95h-.08l-1.664-3.35-.112-.04-.08.04-.6 4.12h-.064l.12-3.862-.12-.136-.088.008-1.92 3.398-.048-.064.84-3.83-.072-.12-.136-.024-2.566 2.998-.032-.08 1.824-3.59-.056-.128-.104-.024-3.19 1.824.048-.08 2.566-2.87-.048-.127-.12-.016-3.67.463z"/>
-        </svg>
-        <span>Add annotation</span>
-        <span class="shortcut-hint" id="${WIDGET_ID}-button-shortcut" style="display: none;">Shift+C</span>
-      </button>
-      
+      <div style="position: fixed; bottom: 20px; right: 20px; z-index: 2147483647;">
+        <button id="${WIDGET_ID}-button" class="disconnected" style="position: relative;">
+          <svg class="claude-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H4.104v-.08l2.878-1.17-.107-.312h-.063L3.87 12.802v-.064l6.048-3.318V9.3L4.14 6.622l.064-.064 4.848 1.336.063-.063-.08-.392L4.66 3.893 8.34 5.58l.312-.072V5.34L6.35 2.766l2.374 1.68.08-.064-.032-.44L6.83.782 9.3 3.67l.12-.048.064-3.59h.064l.663 3.222.168.056L12.12.614v.064l-.92 3.406.072.128h.08L14.12.766v.08l-1.92 3.83.064.104 3.63-2.63-.064.08-2.35 3.734.04.12.128.024 3.934-1.4-.08.08-3.07 2.63v.08l.112.063 3.83-.92-.064.08-3.35 1.6v.04l.12.128 3.566.128-.08.064-3.606.695-.064.136.032.048 3.83 1.4-.08.048-3.83-.015-.128.104-.008.072 3.35 2.446-.08.032-3.59-1.344-.12.064-.04.104 2.342 3.35-.08.016-2.998-2.566-.088.056-.128.168.87 3.95h-.08l-1.664-3.35-.112-.04-.08.04-.6 4.12h-.064l.12-3.862-.12-.136-.088.008-1.92 3.398-.048-.064.84-3.83-.072-.12-.136-.024-2.566 2.998-.032-.08 1.824-3.59-.056-.128-.104-.024-3.19 1.824.048-.08 2.566-2.87-.048-.127-.12-.016-3.67.463z"/>
+          </svg>
+          <span>Add annotation</span>
+          <span class="shortcut-hint" id="${WIDGET_ID}-button-shortcut" style="display: none;">Shift+C</span>
+          <span id="${WIDGET_ID}-pending-badge" title="Click to view pending items">0</span>
+        </button>
+      </div>
+
+      <div id="${WIDGET_ID}-queue-panel">
+        <div id="${WIDGET_ID}-queue-header">
+          <h4>Pending Feedback</h4>
+          <button id="${WIDGET_ID}-queue-close" title="Close">×</button>
+        </div>
+        <div id="${WIDGET_ID}-queue-list">
+          <div id="${WIDGET_ID}-queue-empty">No pending feedback</div>
+        </div>
+      </div>
+
       <div id="${WIDGET_ID}-overlay"></div>
       <div id="${WIDGET_ID}-highlight"></div>
       <div id="${WIDGET_ID}-tooltip"></div>
@@ -707,8 +868,124 @@
     }
   }
 
+  // Helper to format relative time
+  function formatRelativeTime(timestamp) {
+    const now = new Date();
+    const date = new Date(timestamp);
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+
+    if (diffSec < 60) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHour < 24) return `${diffHour}h ago`;
+    return date.toLocaleDateString();
+  }
+
+  // Update the pending badge and queue list
+  function updatePendingUI() {
+    const badge = document.getElementById(`${WIDGET_ID}-pending-badge`);
+    const queueList = document.getElementById(`${WIDGET_ID}-queue-list`);
+    const queueEmpty = document.getElementById(`${WIDGET_ID}-queue-empty`);
+
+    if (badge) {
+      badge.textContent = pendingItems.length;
+      badge.classList.toggle('has-items', pendingItems.length > 0);
+    }
+
+    if (queueList) {
+      // Remove existing items (but keep the empty message element)
+      const existingItems = queueList.querySelectorAll(`.${WIDGET_ID}-queue-item`);
+      existingItems.forEach(item => item.remove());
+
+      if (pendingItems.length === 0) {
+        if (queueEmpty) queueEmpty.style.display = 'block';
+      } else {
+        if (queueEmpty) queueEmpty.style.display = 'none';
+
+        pendingItems.forEach(item => {
+          const itemEl = document.createElement('div');
+          itemEl.className = `${WIDGET_ID}-queue-item`;
+          itemEl.dataset.id = item.id;
+
+          const contentEl = document.createElement('div');
+          contentEl.className = `${WIDGET_ID}-queue-item-content`;
+
+          const selectorEl = document.createElement('div');
+          selectorEl.className = `${WIDGET_ID}-queue-item-selector`;
+          selectorEl.textContent = item.selector || 'Unknown element';
+          contentEl.appendChild(selectorEl);
+
+          if (item.description) {
+            const descEl = document.createElement('div');
+            descEl.className = `${WIDGET_ID}-queue-item-description`;
+            descEl.textContent = item.description;
+            contentEl.appendChild(descEl);
+          }
+
+          const timeEl = document.createElement('div');
+          timeEl.className = `${WIDGET_ID}-queue-item-time`;
+          timeEl.textContent = formatRelativeTime(item.timestamp);
+          contentEl.appendChild(timeEl);
+
+          itemEl.appendChild(contentEl);
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.className = `${WIDGET_ID}-queue-item-delete`;
+          deleteBtn.title = 'Delete this feedback';
+          deleteBtn.textContent = '×';
+          deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deletePendingItem(item.id);
+          });
+          itemEl.appendChild(deleteBtn);
+
+          queueList.appendChild(itemEl);
+        });
+      }
+    }
+  }
+
+  // Toggle queue panel visibility
+  function toggleQueuePanel() {
+    const panel = document.getElementById(`${WIDGET_ID}-queue-panel`);
+    if (panel) {
+      isPendingQueueOpen = !isPendingQueueOpen;
+      panel.classList.toggle('active', isPendingQueueOpen);
+    }
+  }
+
+  // Close queue panel
+  function closeQueuePanel() {
+    const panel = document.getElementById(`${WIDGET_ID}-queue-panel`);
+    if (panel) {
+      isPendingQueueOpen = false;
+      panel.classList.remove('active');
+    }
+  }
+
+  // Delete a pending item
+  function deletePendingItem(id) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'delete_feedback',
+        id: id,
+      }));
+    }
+  }
+
   function handleServerMessage(message) {
-    if (message.type === 'request_annotation') {
+    if (message.type === 'pending_status') {
+      // Update pending items from server
+      pendingItems = message.items || [];
+      updatePendingUI();
+    } else if (message.type === 'feedback_deleted') {
+      // Feedback was deleted - UI will update via pending_status broadcast
+      if (message.success) {
+        console.log('[Claude Feedback] Feedback deleted:', message.id);
+      }
+    } else if (message.type === 'request_annotation') {
       // Claude is asking for annotation
       showNotification(message.message || 'Claude is requesting your feedback');
       startAnnotationMode();
@@ -755,6 +1032,19 @@
     const doneBtn = document.getElementById(`${WIDGET_ID}-done-btn`);
     const elementInfoToggle = document.getElementById(`${WIDGET_ID}-element-info-toggle`);
     const elementInfoWrapper = document.getElementById(`${WIDGET_ID}-element-info-wrapper`);
+    const pendingBadge = document.getElementById(`${WIDGET_ID}-pending-badge`);
+    const queueCloseBtn = document.getElementById(`${WIDGET_ID}-queue-close`);
+
+    // Pending badge click - toggle queue panel
+    pendingBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pendingItems.length > 0) {
+        toggleQueuePanel();
+      }
+    });
+
+    // Queue panel close button
+    queueCloseBtn.addEventListener('click', closeQueuePanel);
 
     // Element info toggle
     elementInfoToggle.addEventListener('click', () => {
@@ -855,11 +1145,15 @@
 
     // Global keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Escape to cancel annotation mode or close panel
+      // Escape to cancel annotation mode or close panels
       if (e.key === 'Escape') {
         const panel = document.getElementById(`${WIDGET_ID}-panel`);
         if (panel && panel.classList.contains('active')) {
           hidePanel();
+          return;
+        }
+        if (isPendingQueueOpen) {
+          closeQueuePanel();
           return;
         }
         if (isAnnotationMode) {
