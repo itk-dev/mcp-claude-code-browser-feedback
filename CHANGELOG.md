@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fix hostname wildcard pattern conversion to valid regex (e.g., `*.local.*` now correctly matches `app.local.itkdev.dk`)
+- Fix multi-instance connection issues when multiple Claude Code sessions are running - MCP tools now proxy requests via HTTP to the running server instance
+
+### Added
+
+- Add CLAUDE.md with project documentation
+
+## [0.3.0] - 2026-01-24
+
+### Added
+
+- `open_in_browser` tool to open project URL in default browser with auto-detection from config files (.env, docker-compose.yml, etc.)
+- `allowed_hostnames` parameter for `install_widget` to support custom development domains (e.g., `*.local.itkdev.dk`)
+
+### Fixed
+
+- Fix widget to support multiple feedback submissions in a single session
+
 ## [0.2.0] - 2026-01-17
 
 ### Added
@@ -56,5 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Widget only connects to localhost
 - No external data transmission
 
-[0.2.0]: https://github.com/yepzdk/mcp-claude-code-browser-feedback/releases/tag/v0.2.0
-[0.1.0]: https://github.com/yepzdk/mcp-claude-code-browser-feedback/releases/tag/v0.1.0
+[Unreleased]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/releases/tag/v0.3.0
+[0.2.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/releases/tag/v0.2.0
+[0.1.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/releases/tag/v0.1.0
