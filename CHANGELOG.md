@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-24
+
+### Added
+
+- View pending annotations from browser widget
+  - Pending count badge on main button (red circle showing number of items)
+  - Collapsible queue panel showing pending items with selector, description preview, and relative timestamp
+  - Delete individual pending items directly from widget
+  - Real-time updates via WebSocket when feedback is added/removed/cleared
+- `preview_pending_feedback` MCP tool to view pending feedback without clearing the queue
+- `delete_pending_feedback` MCP tool to remove specific feedback items by ID
+- `GET /pending-summary` HTTP endpoint for lightweight status polling
+- `DELETE /feedback/:id` HTTP endpoint to remove specific items
+
 ## [0.3.1] - 2026-01-24
 
 ### Fixed
@@ -78,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Widget only connects to localhost
 - No external data transmission
 
+[0.4.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/releases/tag/v0.3.0
 [0.2.0]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/releases/tag/v0.2.0
