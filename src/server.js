@@ -1499,6 +1499,59 @@ The widget only loads in development (localhost) by default.
 });
 
 // ============================================
+// Graceful shutdown handling
+// ============================================
+
+let isShuttingDown = false;
+
+function shutdown(reason) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.error(`[browser-feedback-mcp] Shutting down: ${reason}`);
+
+  // Only close HTTP server if we own it
+  if (isHttpServerOwner) {
+    // Close all WebSocket connections
+    for (const client of connectedClients) {
+      try {
+        client.close();
+      } catch (err) {
+        // Ignore errors during shutdown
+      }
+    }
+
+    // Close the WebSocket server
+    wss.close(() => {
+      console.error('[browser-feedback-mcp] WebSocket server closed');
+    });
+
+    // Close the HTTP server
+    httpServer.close(() => {
+      console.error('[browser-feedback-mcp] HTTP server closed');
+      process.exit(0);
+    });
+
+    // Force exit after timeout if graceful shutdown fails
+    setTimeout(() => {
+      console.error('[browser-feedback-mcp] Forcing exit after timeout');
+      process.exit(0);
+    }, 2000);
+  } else {
+    // Not the HTTP server owner, just exit
+    process.exit(0);
+  }
+}
+
+// Listen for stdin close (MCP client disconnected)
+process.stdin.on('end', () => shutdown('stdin ended'));
+process.stdin.on('close', () => shutdown('stdin closed'));
+
+// Handle signals
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// ============================================
 // Start servers
 // ============================================
 
