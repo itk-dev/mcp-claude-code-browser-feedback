@@ -22,6 +22,65 @@ const PORT = parseInt(process.env.FEEDBACK_PORT || "9877");
 let pendingFeedback = [];
 let feedbackResolvers = []; // Promises waiting for feedback
 let connectedClients = new Set();
+let isHttpServerOwner = false; // Track if this instance owns the HTTP server
+
+// Helper to fetch status from the running HTTP server
+async function fetchServerStatus() {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/status`);
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    // Server not running or not reachable
+  }
+  return null;
+}
+
+// Helper to fetch feedback from the running HTTP server
+async function fetchPendingFeedback(clear = true) {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}`);
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    // Server not running or not reachable
+  }
+  return null;
+}
+
+// Helper to poll for feedback from the running HTTP server
+async function pollForFeedback(timeoutSeconds) {
+  const pollInterval = 500; // ms
+  const maxAttempts = (timeoutSeconds * 1000) / pollInterval;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    const result = await fetchPendingFeedback(true);
+    if (result && result.feedback && result.feedback.length > 0) {
+      return result.feedback[0];
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+  throw new Error("Timeout waiting for browser feedback");
+}
+
+// Helper to broadcast message via the running HTTP server
+async function broadcastViaHttp(message) {
+  try {
+    const response = await fetch(`http://localhost:${PORT}/broadcast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    // Server not running or not reachable
+  }
+  return null;
+}
 
 // ============================================
 // HTTP Server - serves widget.js
@@ -30,7 +89,7 @@ let connectedClients = new Set();
 const httpServer = http.createServer((req, res) => {
   // CORS headers for cross-origin requests
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -39,7 +98,10 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === "/widget.js") {
+  // Parse URL for query parameters
+  const urlObj = new URL(req.url, `http://localhost:${PORT}`);
+
+  if (urlObj.pathname === "/widget.js") {
     const widgetPath = path.join(__dirname, "widget.js");
     fs.readFile(widgetPath, "utf8", (err, content) => {
       if (err) {
@@ -58,7 +120,7 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === "/status") {
+  if (urlObj.pathname === "/status") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
@@ -67,6 +129,43 @@ const httpServer = http.createServer((req, res) => {
         pendingFeedback: pendingFeedback.length,
       })
     );
+    return;
+  }
+
+  // GET /feedback - retrieve pending feedback (used by secondary MCP instances)
+  if (urlObj.pathname === "/feedback" && req.method === "GET") {
+    const shouldClear = urlObj.searchParams.get("clear") !== "false";
+    const feedback = [...pendingFeedback];
+    if (shouldClear) {
+      pendingFeedback = [];
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ feedback }));
+    return;
+  }
+
+  // POST /broadcast - broadcast message to connected clients (used by secondary MCP instances)
+  if (urlObj.pathname === "/broadcast" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const message = JSON.parse(body);
+        const data = JSON.stringify(message);
+        let sentCount = 0;
+        for (const client of connectedClients) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(data);
+            sentCount++;
+          }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, clientCount: sentCount }));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
+      }
+    });
     return;
   }
 
@@ -407,8 +506,8 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         const patternChecks = allowedHostnames.map(pattern => {
           // Escape special regex chars except *
           const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-          // Convert * to regex pattern (match any chars except dots for single *, any chars for **)
-          const regexPattern = escaped.replace(/\\\*/g, '[^.]*');
+          // Convert * to regex pattern (match any chars except dots)
+          const regexPattern = escaped.replace(/\*/g, '[^.]*');
           return `/${'^' + regexPattern + '$'}/i.test(h)`;
         });
 
@@ -601,7 +700,31 @@ The widget only loads in development (localhost) by default.
 
     case "wait_for_browser_feedback": {
       const timeoutSeconds = args?.timeout_seconds || 300;
-      
+
+      // If we don't own the HTTP server, poll via HTTP
+      if (!isHttpServerOwner) {
+        try {
+          const feedback = await pollForFeedback(timeoutSeconds);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(feedback, null, 2),
+              },
+            ],
+          };
+        } catch (err) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: err.message,
+              },
+            ],
+          };
+        }
+      }
+
       // Check if there's already pending feedback
       if (pendingFeedback.length > 0) {
         const feedback = pendingFeedback.shift();
@@ -640,6 +763,41 @@ The widget only loads in development (localhost) by default.
 
     case "get_pending_feedback": {
       const shouldClear = args?.clear !== false;
+
+      // If we don't own the HTTP server, fetch via HTTP
+      if (!isHttpServerOwner) {
+        const result = await fetchPendingFeedback(shouldClear);
+        if (result && result.feedback) {
+          if (result.feedback.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No pending feedback.",
+                },
+              ],
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result.feedback, null, 2),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Could not fetch feedback. Is the feedback server running?",
+              },
+            ],
+          };
+        }
+      }
+
       const feedback = [...pendingFeedback];
       if (shouldClear) {
         pendingFeedback = [];
@@ -669,6 +827,67 @@ The widget only loads in development (localhost) by default.
     case "wait_for_multiple_feedback": {
       const timeoutSeconds = args?.timeout_seconds || 300;
       const message = args?.message || "Submit all your feedback, then click 'Done' when finished.";
+
+      // If we don't own the HTTP server, use a simpler polling approach
+      if (!isHttpServerOwner) {
+        // Check connection status first
+        const status = await fetchServerStatus();
+        if (!status || status.connectedClients === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No browser clients connected. Make sure the widget script is loaded in your app.",
+              },
+            ],
+          };
+        }
+
+        // Clear any existing feedback and broadcast request
+        await fetchPendingFeedback(true);
+        await broadcastViaHttp({
+          type: "request_multiple_annotations",
+          message: message,
+        });
+
+        // Poll for feedback - collect until timeout or no new feedback for 5 seconds
+        const allFeedback = [];
+        const startTime = Date.now();
+        let lastFeedbackTime = startTime;
+        const idleTimeout = 5000; // 5 seconds of no new feedback = done
+
+        while (Date.now() - startTime < timeoutSeconds * 1000) {
+          const result = await fetchPendingFeedback(true);
+          if (result && result.feedback && result.feedback.length > 0) {
+            allFeedback.push(...result.feedback);
+            lastFeedbackTime = Date.now();
+          } else if (allFeedback.length > 0 && Date.now() - lastFeedbackTime > idleTimeout) {
+            // Got some feedback and no new feedback for a while - assume done
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        if (allFeedback.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No feedback was submitted within the timeout period.",
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Received ${allFeedback.length} feedback item(s):\n\n${JSON.stringify(allFeedback, null, 2)}`,
+            },
+          ],
+        };
+      }
 
       if (connectedClients.size === 0) {
         return {
@@ -738,6 +957,50 @@ The widget only loads in development (localhost) by default.
     }
 
     case "get_connection_status": {
+      // If we don't own the HTTP server, fetch status from the running server
+      if (!isHttpServerOwner) {
+        const status = await fetchServerStatus();
+        if (status) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    connected: status.connectedClients > 0,
+                    clientCount: status.connectedClients,
+                    serverUrl: `http://localhost:${PORT}`,
+                    widgetUrl: `http://localhost:${PORT}/widget.js`,
+                    note: "Status fetched from running server (this MCP instance is proxying)",
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    connected: false,
+                    clientCount: 0,
+                    serverUrl: `http://localhost:${PORT}`,
+                    widgetUrl: `http://localhost:${PORT}/widget.js`,
+                    error: "Could not connect to feedback server. Is it running?",
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+      }
+
       return {
         content: [
           {
@@ -759,6 +1022,35 @@ The widget only loads in development (localhost) by default.
 
     case "request_annotation": {
       const message = args?.message || "Please annotate the issue you'd like to report.";
+
+      // If we don't own the HTTP server, broadcast via HTTP
+      if (!isHttpServerOwner) {
+        const result = await broadcastViaHttp({
+          type: "request_annotation",
+          message: message,
+        });
+        if (result && result.success) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: result.clientCount > 0
+                  ? `Annotation request sent to ${result.clientCount} connected browser(s). The user will see a prompt asking them to annotate.`
+                  : "No browser clients connected. Make sure the widget script is loaded in your app.",
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Could not send annotation request. Is the feedback server running?",
+              },
+            ],
+          };
+        }
+      }
 
       if (connectedClients.size === 0) {
         return {
@@ -968,15 +1260,16 @@ async function main() {
   // Start HTTP/WebSocket server (may fail if port is in use, but MCP will still work)
   httpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[browser-feedback-mcp] Warning: Port ${PORT} is already in use.`);
-      console.error(`[browser-feedback-mcp] Another instance may be running, or use FEEDBACK_PORT env var to change port.`);
-      console.error(`[browser-feedback-mcp] MCP server is still running, but browser widget won't be available on this port.`);
+      console.error(`[browser-feedback-mcp] Port ${PORT} is already in use by another instance.`);
+      console.error(`[browser-feedback-mcp] MCP tools will proxy requests to the running server.`);
+      // isHttpServerOwner remains false, tools will use HTTP proxy
     } else {
       console.error(`[browser-feedback-mcp] HTTP server error:`, err);
     }
   });
 
   httpServer.listen(PORT, () => {
+    isHttpServerOwner = true;
     console.error(`[browser-feedback-mcp] HTTP/WebSocket server running on http://localhost:${PORT}`);
     console.error(`[browser-feedback-mcp] Widget available at http://localhost:${PORT}/widget.js`);
   });
