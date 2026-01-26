@@ -1,6 +1,6 @@
 {
   "name": "mcp-claude-code-browser-feedback",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "MCP server for collecting visual browser feedback and sending to Claude Code",
   "type": "module",
   "main": "src/server.js",
