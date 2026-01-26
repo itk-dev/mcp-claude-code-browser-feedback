@@ -384,7 +384,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
             allowed_hostnames: {
               type: "array",
               items: { type: "string" },
-              description: "List of hostnames or patterns allowed when dev_only is true. Supports exact matches (e.g., 'localhost') and wildcard patterns (e.g., '*.local.itkdev.dk', '*.local.*'). Defaults to common local dev patterns: localhost, 127.0.0.1, *.local, *.local.*, *.test, *.dev, *.ddev.site",
+              description: "List of hostnames or patterns allowed when dev_only is true. Supports exact matches (e.g., 'localhost') and wildcard patterns where '*' matches any characters including dots (e.g., '*.local.itkdev.dk' matches 'app.local.itkdev.dk', '*.local.*' matches 'app.local.example.dk'). Defaults to common local dev patterns: localhost, 127.0.0.1, *.local, *.local.*, *.test, *.dev, *.ddev.site",
             },
           },
           required: [],
@@ -637,8 +637,8 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         const patternChecks = allowedHostnames.map(pattern => {
           // Escape special regex chars except *
           const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-          // Convert * to regex pattern (match any chars except dots)
-          const regexPattern = escaped.replace(/\*/g, '[^.]*');
+          // Convert * to regex pattern (match any chars including dots for multi-segment matches)
+          const regexPattern = escaped.replace(/\*/g, '.*');
           return `/${'^' + regexPattern + '$'}/i.test(h)`;
         });
 
