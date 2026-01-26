@@ -134,6 +134,105 @@ async function deleteFeedbackViaHttp(id) {
   return null;
 }
 
+// Helper to detect project URL from configuration files
+function detectProjectUrl(projectDir) {
+  // Detection strategies in order of priority
+  const detectionStrategies = [
+    // .env file patterns
+    {
+      file: '.env',
+      patterns: [
+        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
+        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
+      ],
+      transform: (match) => {
+        const value = match[1];
+        // Add protocol if missing
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return `https://${value}`;
+        }
+        return value;
+      },
+    },
+    // .env.local file patterns
+    {
+      file: '.env.local',
+      patterns: [
+        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
+        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
+      ],
+      transform: (match) => {
+        const value = match[1];
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return `https://${value}`;
+        }
+        return value;
+      },
+    },
+    // docker-compose.yml patterns
+    {
+      file: 'docker-compose.yml',
+      patterns: [
+        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
+        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
+      ],
+      transform: (match) => {
+        const value = match[1];
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return `https://${value}`;
+        }
+        return value;
+      },
+    },
+    // docker-compose.override.yml patterns
+    {
+      file: 'docker-compose.override.yml',
+      patterns: [
+        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
+        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
+      ],
+      transform: (match) => {
+        const value = match[1];
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return `https://${value}`;
+        }
+        return value;
+      },
+    },
+    // package.json homepage or proxy
+    {
+      file: 'package.json',
+      patterns: [
+        /"homepage"\s*:\s*"([^"]+)"/,
+        /"proxy"\s*:\s*"([^"]+)"/,
+      ],
+      transform: (match) => match[1],
+    },
+  ];
+
+  for (const strategy of detectionStrategies) {
+    const filePath = path.join(projectDir, strategy.file);
+    if (fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        for (const pattern of strategy.patterns) {
+          const match = content.match(pattern);
+          if (match) {
+            return {
+              url: strategy.transform(match),
+              detectedFrom: strategy.file,
+            };
+          }
+        }
+      } catch (err) {
+        // Continue to next strategy
+      }
+    }
+  }
+
+  return { url: null, detectedFrom: null };
+}
+
 // ============================================
 // HTTP Server - serves widget.js
 // ============================================
@@ -632,22 +731,38 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Generate script tag
       let scriptTag;
+      let hostnameInfo;
+      let detected = { url: null, detectedFrom: null };
+
       if (devOnly) {
-        // Convert glob patterns to regex patterns for browser-side matching
-        const patternChecks = allowedHostnames.map(pattern => {
-          // Escape special regex chars except *
-          const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-          // Convert * to regex pattern (match any chars including dots for multi-segment matches)
-          const regexPattern = escaped.replace(/\*/g, '.*');
-          return `/${'^' + regexPattern + '$'}/i.test(h)`;
-        });
+        // Try to detect project URL for precise hostname matching
+        detected = detectProjectUrl(projectDir);
+        let hostnameCheck;
+
+        if (detected.url) {
+          // Use exact hostname match from detected URL
+          const detectedHostname = new URL(detected.url).hostname;
+          hostnameCheck = `h === '${detectedHostname}'`;
+          hostnameInfo = `Development only (hostname: ${detectedHostname}, detected from ${detected.detectedFrom})`;
+        } else {
+          // Fall back to regex pattern matching
+          const patternChecks = allowedHostnames.map(pattern => {
+            // Escape special regex chars except *
+            const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+            // Convert * to regex pattern (match any chars including dots for multi-segment matches)
+            const regexPattern = escaped.replace(/\*/g, '.*');
+            return `/${'^' + regexPattern + '$'}/i.test(h)`;
+          });
+          hostnameCheck = patternChecks.join(' || ');
+          hostnameInfo = `Development only (allowed hostnames: ${allowedHostnames.join(', ')})`;
+        }
 
         scriptTag = `
 <!-- Claude Code Browser Feedback Widget (dev only) -->
 <script>
   (function() {
     var h = location.hostname;
-    var isDevHost = ${patternChecks.join(' || ')};
+    var isDevHost = ${hostnameCheck};
     if (isDevHost) {
       var s = document.createElement('script');
       s.src = 'http://localhost:${PORT}/widget.js';
@@ -657,6 +772,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   })();
 </script>`;
       } else {
+        hostnameInfo = 'Always loaded';
         scriptTag = `
 <!-- Claude Code Browser Feedback Widget -->
 <script src="http://localhost:${PORT}/widget.js" id="claude-feedback-widget-script"></script>`;
@@ -680,9 +796,10 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Write back
       fs.writeFileSync(filePath, content, 'utf8');
 
-      const hostnameInfo = devOnly
-        ? `Development only (allowed hostnames: ${allowedHostnames.join(', ')})`
-        : 'Always loaded';
+      // Include URL info if detected (and not already in hostnameInfo)
+      const urlInfo = detected.url
+        ? `\n**URL:** ${detected.url}`
+        : '';
 
       return {
         content: [{
@@ -690,9 +807,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: `✅ Widget installed successfully!
 
 **File:** ${filePath}
-**Mode:** ${hostnameInfo}
+**Mode:** ${hostnameInfo}${urlInfo}
 
-The floating "🎯 Report Issue" button will appear when you load the page.
+The floating "Add annotation" button will appear when you load the page.
 
 Next steps:
 1. Refresh your browser to load the widget
@@ -807,7 +924,7 @@ Add this script tag to your web application's HTML (typically before </body>):
 
 ${snippet}
 
-Once added, a small "🎯 Report Issue" button will appear in the bottom-right corner of your app.
+Once added, a small "Add annotation" button will appear in the bottom-right corner of your app.
 
 Users can:
 1. Click the button to activate annotation mode
@@ -1337,99 +1454,9 @@ The widget only loads in development (localhost) by default.
 
       // If no URL provided, try to detect from config files
       if (!url) {
-        // Detection strategies in order of priority
-        const detectionStrategies = [
-          // .env file patterns
-          {
-            file: '.env',
-            patterns: [
-              /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-              /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-            ],
-            transform: (match) => {
-              const value = match[1];
-              // Add protocol if missing
-              if (!value.startsWith('http://') && !value.startsWith('https://')) {
-                return `https://${value}`;
-              }
-              return value;
-            },
-          },
-          // .env.local file patterns
-          {
-            file: '.env.local',
-            patterns: [
-              /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-              /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-            ],
-            transform: (match) => {
-              const value = match[1];
-              if (!value.startsWith('http://') && !value.startsWith('https://')) {
-                return `https://${value}`;
-              }
-              return value;
-            },
-          },
-          // docker-compose.yml patterns
-          {
-            file: 'docker-compose.yml',
-            patterns: [
-              /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-              /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-            ],
-            transform: (match) => {
-              const value = match[1];
-              if (!value.startsWith('http://') && !value.startsWith('https://')) {
-                return `https://${value}`;
-              }
-              return value;
-            },
-          },
-          // docker-compose.override.yml patterns
-          {
-            file: 'docker-compose.override.yml',
-            patterns: [
-              /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-              /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-            ],
-            transform: (match) => {
-              const value = match[1];
-              if (!value.startsWith('http://') && !value.startsWith('https://')) {
-                return `https://${value}`;
-              }
-              return value;
-            },
-          },
-          // package.json homepage or proxy
-          {
-            file: 'package.json',
-            patterns: [
-              /"homepage"\s*:\s*"([^"]+)"/,
-              /"proxy"\s*:\s*"([^"]+)"/,
-            ],
-            transform: (match) => match[1],
-          },
-        ];
-
-        for (const strategy of detectionStrategies) {
-          const filePath = path.join(projectDir, strategy.file);
-          if (fs.existsSync(filePath)) {
-            try {
-              const content = fs.readFileSync(filePath, 'utf8');
-              for (const pattern of strategy.patterns) {
-                const match = content.match(pattern);
-                if (match) {
-                  url = strategy.transform(match);
-                  detectedFrom = strategy.file;
-                  break;
-                }
-              }
-              if (url) break;
-            } catch (err) {
-              // Continue to next strategy
-            }
-          }
-        }
+        const detected = detectProjectUrl(projectDir);
+        url = detected.url;
+        detectedFrom = detected.detectedFrom;
 
         if (!url) {
           return {
