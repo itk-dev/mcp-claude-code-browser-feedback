@@ -692,7 +692,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 **File:** ${filePath}
 **Mode:** ${hostnameInfo}
 
-The floating "🎯 Report Issue" button will appear when you load the page.
+The floating "Add annotation" button will appear when you load the page.
 
 Next steps:
 1. Refresh your browser to load the widget
@@ -807,7 +807,7 @@ Add this script tag to your web application's HTML (typically before </body>):
 
 ${snippet}
 
-Once added, a small "🎯 Report Issue" button will appear in the bottom-right corner of your app.
+Once added, a small "Add annotation" button will appear in the bottom-right corner of your app.
 
 Users can:
 1. Click the button to activate annotation mode
