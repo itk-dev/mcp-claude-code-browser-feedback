@@ -66,10 +66,10 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
 - `*.test`, `*.dev` - Common dev TLDs
 - `*.ddev.site` - DDEV local development
 
-**Pattern syntax:** Use `*` as wildcard to match any characters except dots. Examples:
+**Pattern syntax:** Use `*` as wildcard to match any characters (including dots for multi-segment matches). Examples:
 - `myapp.local.itkdev.dk` - Exact match
-- `*.local.itkdev.dk` - Matches any subdomain of local.itkdev.dk
-- `*.local.*` - Matches any domain with .local. in it
+- `*.local.itkdev.dk` - Matches any subdomain of local.itkdev.dk (e.g., `app.local.itkdev.dk`)
+- `*.local.*` - Matches any domain with .local. in it (e.g., `app.local.example.dk`, `foo.local.bar.baz`)
 
 ## Configuration
 
