@@ -798,7 +798,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Include URL info if detected (and not already in hostnameInfo)
       const urlInfo = detected.url
-        ? `\n**URL:** ${detected.url}`
+        ? `\n**URL:** [${detected.url}](${detected.url})`
         : '';
 
       return {
