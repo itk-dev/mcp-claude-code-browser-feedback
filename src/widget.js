@@ -130,6 +130,50 @@
       flex-shrink: 0;
     }
 
+    #${WIDGET_ID}-send-to-claude-btn {
+      position: relative;
+      background: linear-gradient(135deg, #22c55e 0%, #4ade80 100%);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
+      transition: all 0.2s ease;
+      display: none;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #${WIDGET_ID}-send-to-claude-btn.visible {
+      display: flex;
+    }
+
+    #${WIDGET_ID}-send-to-claude-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(34, 197, 94, 0.5);
+    }
+
+    #${WIDGET_ID}-send-badge {
+      background: rgba(255, 255, 255, 0.3);
+      font-size: 12px;
+      font-weight: 700;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 6px;
+      cursor: pointer;
+    }
+
+    #${WIDGET_ID}-send-badge:hover {
+      background: rgba(255, 255, 255, 0.5);
+    }
+
     #${WIDGET_ID}-pending-badge {
       position: absolute;
       top: -6px;
@@ -659,7 +703,14 @@
     const container = document.createElement('div');
     container.id = WIDGET_ID;
     container.innerHTML = `
-      <div style="position: fixed; bottom: 20px; right: 20px; z-index: 2147483647;">
+      <div style="position: fixed; bottom: 20px; right: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">
+        <button id="${WIDGET_ID}-send-to-claude-btn">
+          <svg class="claude-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H4.104v-.08l2.878-1.17-.107-.312h-.063L3.87 12.802v-.064l6.048-3.318V9.3L4.14 6.622l.064-.064 4.848 1.336.063-.063-.08-.392L4.66 3.893 8.34 5.58l.312-.072V5.34L6.35 2.766l2.374 1.68.08-.064-.032-.44L6.83.782 9.3 3.67l.12-.048.064-3.59h.064l.663 3.222.168.056L12.12.614v.064l-.92 3.406.072.128h.08L14.12.766v.08l-1.92 3.83.064.104 3.63-2.63-.064.08-2.35 3.734.04.12.128.024 3.934-1.4-.08.08-3.07 2.63v.08l.112.063 3.83-.92-.064.08-3.35 1.6v.04l.12.128 3.566.128-.08.064-3.606.695-.064.136.032.048 3.83 1.4-.08.048-3.83-.015-.128.104-.008.072 3.35 2.446-.08.032-3.59-1.344-.12.064-.04.104 2.342 3.35-.08.016-2.998-2.566-.088.056-.128.168.87 3.95h-.08l-1.664-3.35-.112-.04-.08.04-.6 4.12h-.064l.12-3.862-.12-.136-.088.008-1.92 3.398-.048-.064.84-3.83-.072-.12-.136-.024-2.566 2.998-.032-.08 1.824-3.59-.056-.128-.104-.024-3.19 1.824.048-.08 2.566-2.87-.048-.127-.12-.016-3.67.463z"/>
+          </svg>
+          <span>Send to Claude</span>
+          <span id="${WIDGET_ID}-send-badge" title="Click to view pending items">0</span>
+        </button>
         <button id="${WIDGET_ID}-button" class="disconnected" style="position: relative;">
           <svg class="claude-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H4.104v-.08l2.878-1.17-.107-.312h-.063L3.87 12.802v-.064l6.048-3.318V9.3L4.14 6.622l.064-.064 4.848 1.336.063-.063-.08-.392L4.66 3.893 8.34 5.58l.312-.072V5.34L6.35 2.766l2.374 1.68.08-.064-.032-.44L6.83.782 9.3 3.67l.12-.048.064-3.59h.064l.663 3.222.168.056L12.12.614v.064l-.92 3.406.072.128h.08L14.12.766v.08l-1.92 3.83.064.104 3.63-2.63-.064.08-2.35 3.734.04.12.128.024 3.934-1.4-.08.08-3.07 2.63v.08l.112.063 3.83-.92-.064.08-3.35 1.6v.04l.12.128 3.566.128-.08.064-3.606.695-.064.136.032.048 3.83 1.4-.08.048-3.83-.015-.128.104-.008.072 3.35 2.446-.08.032-3.59-1.344-.12.064-.04.104 2.342 3.35-.08.016-2.998-2.566-.088.056-.128.168.87 3.95h-.08l-1.664-3.35-.112-.04-.08.04-.6 4.12h-.064l.12-3.862-.12-.136-.088.008-1.92 3.398-.048-.064.84-3.83-.072-.12-.136-.024-2.566 2.998-.032-.08 1.824-3.59-.056-.128-.104-.024-3.19 1.824.048-.08 2.566-2.87-.048-.127-.12-.016-3.67.463z"/>
@@ -720,12 +771,12 @@
           </div>
           <div id="${WIDGET_ID}-actions">
             <button id="${WIDGET_ID}-cancel-btn">Cancel</button>
-            <button id="${WIDGET_ID}-send-btn">Send to Claude<span class="shortcut-hint">${modifierSymbol}↵</span></button>
+            <button id="${WIDGET_ID}-send-btn">Add item<span class="shortcut-hint">${modifierSymbol}↵</span></button>
           </div>
         </div>
       </div>
       
-      <div id="${WIDGET_ID}-success">✓ Feedback sent to Claude!</div>
+      <div id="${WIDGET_ID}-success"></div>
       <div id="${WIDGET_ID}-error"></div>
 
       <div id="${WIDGET_ID}-multi-bar">
@@ -883,15 +934,25 @@
     return date.toLocaleDateString();
   }
 
-  // Update the pending badge and queue list
+  // Update the pending badge, send button, and queue list
   function updatePendingUI() {
     const badge = document.getElementById(`${WIDGET_ID}-pending-badge`);
+    const sendToClaudeBtn = document.getElementById(`${WIDGET_ID}-send-to-claude-btn`);
+    const sendBadge = document.getElementById(`${WIDGET_ID}-send-badge`);
     const queueList = document.getElementById(`${WIDGET_ID}-queue-list`);
     const queueEmpty = document.getElementById(`${WIDGET_ID}-queue-empty`);
 
     if (badge) {
       badge.textContent = pendingItems.length;
       badge.classList.toggle('has-items', pendingItems.length > 0);
+    }
+
+    // Show/hide the "Send to Claude" floating button
+    if (sendToClaudeBtn) {
+      sendToClaudeBtn.classList.toggle('visible', pendingItems.length > 0);
+    }
+    if (sendBadge) {
+      sendBadge.textContent = pendingItems.length;
     }
 
     if (queueList) {
@@ -993,11 +1054,13 @@
       // Claude wants multiple annotations
       startMultiFeedbackMode(message.message);
     } else if (message.type === 'feedback_received') {
-      showSuccess();
+      showItemAdded();
       if (isMultiFeedbackMode) {
         multiFeedbackCount++;
         updateMultiBar();
       }
+    } else if (message.type === 'sent_to_claude') {
+      showBatchSuccess(message.count);
     }
   }
 
@@ -1034,9 +1097,30 @@
     const elementInfoWrapper = document.getElementById(`${WIDGET_ID}-element-info-wrapper`);
     const pendingBadge = document.getElementById(`${WIDGET_ID}-pending-badge`);
     const queueCloseBtn = document.getElementById(`${WIDGET_ID}-queue-close`);
+    const sendToClaudeBtn = document.getElementById(`${WIDGET_ID}-send-to-claude-btn`);
+    const sendBadge = document.getElementById(`${WIDGET_ID}-send-badge`);
 
     // Pending badge click - toggle queue panel
     pendingBadge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pendingItems.length > 0) {
+        toggleQueuePanel();
+      }
+    });
+
+    // "Send to Claude" button click - send signal to server
+    sendToClaudeBtn.addEventListener('click', (e) => {
+      // If clicked on the badge, toggle queue panel instead
+      if (e.target === sendBadge || sendBadge.contains(e.target)) {
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN && pendingItems.length > 0) {
+        ws.send(JSON.stringify({ type: 'send_to_claude' }));
+      }
+    });
+
+    // Send badge click - toggle queue panel
+    sendBadge.addEventListener('click', (e) => {
       e.stopPropagation();
       if (pendingItems.length > 0) {
         toggleQueuePanel();
@@ -1180,14 +1264,14 @@
     descriptionTextarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e[modifierKey]) {
         e.preventDefault();
-        sendFeedback();
+        addItem();
       }
     });
 
     // Panel buttons
     closeBtn.addEventListener('click', hidePanel);
     cancelBtn.addEventListener('click', hidePanel);
-    sendBtn.addEventListener('click', sendFeedback);
+    sendBtn.addEventListener('click', addItem);
 
     // Done button for multi-feedback mode
     doneBtn.addEventListener('click', finishMultiFeedback);
@@ -1302,7 +1386,7 @@
     selectedElement = null;
   }
 
-  async function sendFeedback() {
+  async function addItem() {
     // Validate we have an element selected
     if (!selectedElement) {
       console.warn('[Claude Feedback] No element selected');
@@ -1322,7 +1406,7 @@
       // Wait a bit for reconnection, then retry once
       setTimeout(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
-          sendFeedback();
+          addItem();
         } else {
           showError('Could not reconnect. Please try again.');
         }
@@ -1364,25 +1448,29 @@
       }));
 
       hidePanel();
-
-      // In multi-feedback mode, restart annotation mode for next item
-      if (isMultiFeedbackMode) {
-        setTimeout(() => startAnnotationMode(), 300);
-      }
     } catch (err) {
-      console.error('[Claude Feedback] Failed to send feedback:', err);
-      showError('Failed to send feedback. Please try again.');
+      console.error('[Claude Feedback] Failed to add item:', err);
+      showError('Failed to add item. Please try again.');
     }
   }
 
-  function showSuccess() {
+  function showSuccess(message) {
     const el = document.getElementById(`${WIDGET_ID}-success`);
     if (el) {
+      el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => {
         el.style.display = 'none';
       }, 3000);
     }
+  }
+
+  function showItemAdded() {
+    showSuccess('Item added');
+  }
+
+  function showBatchSuccess(count) {
+    showSuccess(`${count} item${count !== 1 ? 's' : ''} sent to Claude!`);
   }
 
   function showError(message) {
