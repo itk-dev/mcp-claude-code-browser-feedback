@@ -288,17 +288,15 @@ const httpServer = http.createServer((req, res) => {
   // GET /feedback - retrieve feedback (used by secondary MCP instances)
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
+    const feedback = [...pendingFeedback];
     if (shouldClear) {
-      // Return readyFeedback (items user confirmed via "Send to Claude")
-      const feedback = [...readyFeedback];
-      readyFeedback = [];
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ feedback }));
-    } else {
-      // Preview mode: return pendingFeedback for visibility
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ feedback: [...pendingFeedback] }));
+      pendingFeedback = [];
+      if (feedback.length > 0) {
+        broadcastPendingStatus();
+      }
     }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ feedback }));
     return;
   }
 
