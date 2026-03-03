@@ -20,6 +20,7 @@ const PORT = parseInt(process.env.FEEDBACK_PORT || "9877");
 
 // Store for received feedback
 let pendingFeedback = [];
+let readyFeedback = []; // Items confirmed by user for sending to Claude
 let feedbackResolvers = []; // Promises waiting for feedback
 let connectedClients = new Set();
 let isHttpServerOwner = false; // Track if this instance owns the HTTP server
@@ -82,7 +83,8 @@ async function pollForFeedback(timeoutSeconds) {
   for (let i = 0; i < maxAttempts; i++) {
     const result = await fetchPendingFeedback(true);
     if (result && result.feedback && result.feedback.length > 0) {
-      return result.feedback[0];
+      if (result.feedback.length === 1) return result.feedback[0];
+      return result.feedback;
     }
     await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
@@ -283,13 +285,15 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // GET /feedback - retrieve pending feedback (used by secondary MCP instances)
+  // GET /feedback - retrieve feedback (used by secondary MCP instances)
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
     const feedback = [...pendingFeedback];
     if (shouldClear) {
       pendingFeedback = [];
-      broadcastPendingStatus();
+      if (feedback.length > 0) {
+        broadcastPendingStatus();
+      }
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ feedback }));
@@ -388,17 +392,30 @@ wss.on("connection", (ws) => {
 
         pendingFeedback.push(feedback);
 
-        // Resolve any waiting promises
-        while (feedbackResolvers.length > 0) {
-          const resolver = feedbackResolvers.shift();
-          resolver(feedback);
-        }
-
         // Acknowledge receipt
         ws.send(JSON.stringify({ type: "feedback_received", id: feedback.id }));
 
         // Broadcast updated pending status to all clients
         broadcastPendingStatus();
+      }
+
+      if (message.type === "send_to_claude") {
+        // Move all pending items to ready
+        readyFeedback = [...pendingFeedback];
+        pendingFeedback = [];
+        broadcastPendingStatus();
+
+        // Resolve any waiting promises with the batch
+        while (feedbackResolvers.length > 0) {
+          const resolver = feedbackResolvers.shift();
+          resolver(readyFeedback);
+        }
+
+        // Acknowledge to browser
+        ws.send(JSON.stringify({
+          type: "sent_to_claude",
+          count: readyFeedback.length,
+        }));
       }
 
       if (message.type === "delete_feedback") {
@@ -949,6 +966,17 @@ The widget only loads in development (localhost) by default.
     case "wait_for_browser_feedback": {
       const timeoutSeconds = args?.timeout_seconds || 300;
 
+      // Helper to format feedback response (single item or batch)
+      function formatFeedbackResponse(items) {
+        if (!Array.isArray(items)) {
+          return JSON.stringify(items, null, 2);
+        }
+        if (items.length === 1) {
+          return JSON.stringify(items[0], null, 2);
+        }
+        return `Received ${items.length} feedback item(s):\n\n${JSON.stringify(items, null, 2)}`;
+      }
+
       // If we don't own the HTTP server, poll via HTTP
       if (!isHttpServerOwner) {
         try {
@@ -957,7 +985,7 @@ The widget only loads in development (localhost) by default.
             content: [
               {
                 type: "text",
-                text: JSON.stringify(feedback, null, 2),
+                text: Array.isArray(feedback) ? formatFeedbackResponse(feedback) : JSON.stringify(feedback, null, 2),
               },
             ],
           };
@@ -973,21 +1001,21 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      // Check if there's already pending feedback
-      if (pendingFeedback.length > 0) {
-        const feedback = pendingFeedback.shift();
-        broadcastPendingStatus();
+      // Check if there's already ready feedback (user clicked "Send to Claude")
+      if (readyFeedback.length > 0) {
+        const items = [...readyFeedback];
+        readyFeedback = [];
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(feedback, null, 2),
+              text: formatFeedbackResponse(items),
             },
           ],
         };
       }
 
-      // Wait for new feedback
+      // Wait for user to click "Send to Claude"
       const feedback = await Promise.race([
         new Promise((resolve) => {
           feedbackResolvers.push(resolve);
@@ -1000,11 +1028,12 @@ The widget only loads in development (localhost) by default.
         ),
       ]);
 
+      // feedback is now an array (from send_to_claude handler)
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(feedback, null, 2),
+            text: formatFeedbackResponse(feedback),
           },
         ],
       };
