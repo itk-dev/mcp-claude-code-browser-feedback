@@ -723,6 +723,10 @@
           </div>
           <div id="${WIDGET_ID}-options">
             <label>
+              <input type="checkbox" id="${WIDGET_ID}-include-screenshot" checked />
+              Include screenshot (element area)
+            </label>
+            <label>
               <input type="checkbox" id="${WIDGET_ID}-include-logs" checked />
               <span id="${WIDGET_ID}-include-logs-text">Include console logs (${consoleLogs.length} captured)</span>
             </label>
@@ -817,23 +821,75 @@
   // Screenshot Capture
   // ============================================
 
-  async function captureScreenshot() {
-    // Use html2canvas if available, otherwise use a simple approach
-    if (typeof html2canvas !== 'undefined') {
+  let html2canvasPromise = null;
+
+  function loadHtml2Canvas() {
+    if (typeof html2canvas !== 'undefined') return Promise.resolve();
+    if (html2canvasPromise) return html2canvasPromise;
+
+    html2canvasPromise = new Promise((resolve, reject) => {
+      // Derive HTTP URL from WS_URL (same host/port)
+      let baseUrl;
       try {
-        const canvas = await html2canvas(document.body, {
-          logging: false,
-          useCORS: true,
-          scale: 0.5, // Reduce size
-        });
-        return canvas.toDataURL('image/jpeg', 0.7);
-      } catch (err) {
-        console.warn('[Claude Feedback] html2canvas failed:', err);
+        const wsUrl = new URL(WS_URL);
+        baseUrl = `http://${wsUrl.host}`;
+      } catch {
+        baseUrl = `http://localhost:9877`;
       }
+
+      const script = document.createElement('script');
+      script.src = `${baseUrl}/html2canvas.min.js`;
+      script.onload = resolve;
+      script.onerror = () => {
+        html2canvasPromise = null;
+        reject(new Error('Failed to load html2canvas'));
+      };
+      document.head.appendChild(script);
+    });
+
+    return html2canvasPromise;
+  }
+
+  async function captureScreenshot(targetElement) {
+    try {
+      await loadHtml2Canvas();
+    } catch (err) {
+      console.warn('[Claude Feedback] Could not load html2canvas:', err);
+      return null;
     }
-    
-    // Fallback: capture viewport dimensions and state
-    return null;
+
+    if (typeof html2canvas === 'undefined') return null;
+
+    try {
+      const canvas = await html2canvas(document.body, {
+        logging: false,
+        useCORS: true,
+        scale: 1,
+      });
+
+      // If a target element is provided, crop to its bounding rect + padding
+      if (targetElement) {
+        const rect = targetElement.getBoundingClientRect();
+        const padding = 50;
+
+        const sx = Math.max(0, rect.left - padding);
+        const sy = Math.max(0, rect.top - padding);
+        const sw = Math.min(canvas.width - sx, rect.width + padding * 2);
+        const sh = Math.min(canvas.height - sy, rect.height + padding * 2);
+
+        const cropped = document.createElement('canvas');
+        cropped.width = sw;
+        cropped.height = sh;
+        const ctx = cropped.getContext('2d');
+        ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        return cropped.toDataURL('image/jpeg', 0.7);
+      }
+
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch (err) {
+      console.warn('[Claude Feedback] html2canvas failed:', err);
+      return null;
+    }
   }
 
   // ============================================
@@ -1279,16 +1335,17 @@
         <strong>Selector:</strong> ${info.selector}
       `;
     }
-    
-    // Capture screenshot
-    const screenshot = await captureScreenshot();
-    if (screenshot) {
-      screenshotEl.src = screenshot;
-      screenshotEl.style.display = 'block';
+
+    // Show screenshot status instead of preview (screenshot is captured on submit)
+    const includeScreenshotCheckbox = document.getElementById(`${WIDGET_ID}-include-screenshot`);
+    if (includeScreenshotCheckbox && includeScreenshotCheckbox.checked) {
+      screenshotEl.alt = 'Screenshot will be captured when submitted';
+      screenshotEl.removeAttribute('src');
+      screenshotEl.style.display = 'none';
     } else {
       screenshotEl.style.display = 'none';
     }
-    
+
     panel.classList.add('active');
     document.getElementById(`${WIDGET_ID}-description`).focus();
   }
@@ -1330,13 +1387,14 @@
     const description = document.getElementById(`${WIDGET_ID}-description`)?.value || '';
     const includeLogs = document.getElementById(`${WIDGET_ID}-include-logs`)?.checked ?? true;
     const includeStyles = document.getElementById(`${WIDGET_ID}-include-styles`)?.checked ?? true;
+    const includeScreenshot = document.getElementById(`${WIDGET_ID}-include-screenshot`)?.checked ?? true;
 
     const elementInfo = getElementInfo(selectedElement);
     if (!includeStyles) {
       delete elementInfo.computedStyles;
     }
 
-    const screenshot = await captureScreenshot();
+    const screenshot = includeScreenshot ? await captureScreenshot(selectedElement) : null;
 
     const feedback = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2),

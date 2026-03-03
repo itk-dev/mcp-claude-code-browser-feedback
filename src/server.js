@@ -235,6 +235,43 @@ function detectProjectUrl(projectDir) {
   return { url: null, detectedFrom: null };
 }
 
+// Helper to format feedback items as MCP content blocks with ImageContent for screenshots
+function formatFeedbackAsContent(items) {
+  if (!Array.isArray(items)) items = [items];
+
+  const content = [];
+  for (const item of items) {
+    // Separate screenshot from the rest of the data
+    const { screenshot, ...rest } = item;
+
+    content.push({
+      type: "text",
+      text: JSON.stringify(rest, null, 2),
+    });
+
+    if (screenshot && typeof screenshot === 'string') {
+      // Parse data URL: "data:image/jpeg;base64,..."
+      const match = screenshot.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        content.push({
+          type: "image",
+          data: match[2],
+          mimeType: match[1],
+        });
+      }
+    }
+  }
+
+  if (items.length > 1) {
+    content.unshift({
+      type: "text",
+      text: `Received ${items.length} feedback item(s):`,
+    });
+  }
+
+  return content;
+}
+
 // ============================================
 // HTTP Server - serves widget.js
 // ============================================
@@ -269,6 +306,20 @@ const httpServer = http.createServer((req, res) => {
       );
       res.writeHead(200, { "Content-Type": "application/javascript" });
       res.end(injectedContent);
+    });
+    return;
+  }
+
+  if (urlObj.pathname === "/html2canvas.min.js") {
+    const html2canvasPath = path.join(__dirname, "..", "node_modules", "html2canvas", "dist", "html2canvas.min.js");
+    fs.readFile(html2canvasPath, "utf8", (err, content) => {
+      if (err) {
+        res.writeHead(404);
+        res.end("html2canvas not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/javascript" });
+      res.end(content);
     });
     return;
   }
@@ -966,28 +1017,12 @@ The widget only loads in development (localhost) by default.
     case "wait_for_browser_feedback": {
       const timeoutSeconds = args?.timeout_seconds || 300;
 
-      // Helper to format feedback response (single item or batch)
-      function formatFeedbackResponse(items) {
-        if (!Array.isArray(items)) {
-          return JSON.stringify(items, null, 2);
-        }
-        if (items.length === 1) {
-          return JSON.stringify(items[0], null, 2);
-        }
-        return `Received ${items.length} feedback item(s):\n\n${JSON.stringify(items, null, 2)}`;
-      }
-
       // If we don't own the HTTP server, poll via HTTP
       if (!isHttpServerOwner) {
         try {
           const feedback = await pollForFeedback(timeoutSeconds);
           return {
-            content: [
-              {
-                type: "text",
-                text: Array.isArray(feedback) ? formatFeedbackResponse(feedback) : JSON.stringify(feedback, null, 2),
-              },
-            ],
+            content: formatFeedbackAsContent(feedback),
           };
         } catch (err) {
           return {
@@ -1006,12 +1041,7 @@ The widget only loads in development (localhost) by default.
         const items = [...readyFeedback];
         readyFeedback = [];
         return {
-          content: [
-            {
-              type: "text",
-              text: formatFeedbackResponse(items),
-            },
-          ],
+          content: formatFeedbackAsContent(items),
         };
       }
 
@@ -1030,12 +1060,7 @@ The widget only loads in development (localhost) by default.
 
       // feedback is now an array (from send_to_claude handler)
       return {
-        content: [
-          {
-            type: "text",
-            text: formatFeedbackResponse(feedback),
-          },
-        ],
+        content: formatFeedbackAsContent(feedback),
       };
     }
 
@@ -1057,12 +1082,7 @@ The widget only loads in development (localhost) by default.
             };
           }
           return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(result.feedback, null, 2),
-              },
-            ],
+            content: formatFeedbackAsContent(result.feedback),
           };
         } else {
           return {
@@ -1096,12 +1116,7 @@ The widget only loads in development (localhost) by default.
       }
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(feedback, null, 2),
-          },
-        ],
+        content: formatFeedbackAsContent(feedback),
       };
     }
 
@@ -1277,12 +1292,7 @@ The widget only loads in development (localhost) by default.
         }
 
         return {
-          content: [
-            {
-              type: "text",
-              text: `Received ${allFeedback.length} feedback item(s):\n\n${JSON.stringify(allFeedback, null, 2)}`,
-            },
-          ],
+          content: formatFeedbackAsContent(allFeedback),
         };
       }
 
@@ -1344,12 +1354,7 @@ The widget only loads in development (localhost) by default.
       }
 
       return {
-        content: [
-          {
-            type: "text",
-            text: `Received ${allFeedback.length} feedback item(s):\n\n${JSON.stringify(allFeedback, null, 2)}`,
-          },
-        ],
+        content: formatFeedbackAsContent(allFeedback),
       };
     }
 
