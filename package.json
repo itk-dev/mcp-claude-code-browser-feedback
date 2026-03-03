@@ -21,6 +21,7 @@
   "author": "yepzdk",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "html2canvas": "^1.4.1",
     "ws": "^8.16.0"
   },
   "keywords": [
