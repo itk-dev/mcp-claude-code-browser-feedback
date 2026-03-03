@@ -449,7 +449,7 @@ wss.on("connection", (ws) => {
 
       if (message.type === "send_to_claude") {
         // Move all pending items to ready
-        readyFeedback = [...pendingFeedback];
+        readyFeedback.push(...pendingFeedback);
         pendingFeedback = [];
         broadcastPendingStatus();
 
