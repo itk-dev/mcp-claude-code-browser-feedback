@@ -62,8 +62,8 @@ async function fetchServerStatus() {
   return null;
 }
 
-// Helper to fetch feedback from the running HTTP server
-async function fetchPendingFeedback(clear = true) {
+// Helper to fetch ready feedback from the running HTTP server
+async function fetchReadyFeedback(clear = true) {
   try {
     const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}`);
     if (response.ok) {
@@ -81,7 +81,7 @@ async function pollForFeedback(timeoutSeconds) {
   const maxAttempts = (timeoutSeconds * 1000) / pollInterval;
 
   for (let i = 0; i < maxAttempts; i++) {
-    const result = await fetchPendingFeedback(true);
+    const result = await fetchReadyFeedback(true);
     if (result && result.feedback && result.feedback.length > 0) {
       if (result.feedback.length === 1) return result.feedback[0];
       return result.feedback;
@@ -336,15 +336,12 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // GET /feedback - retrieve feedback (used by secondary MCP instances)
+  // GET /feedback - retrieve ready feedback (used by secondary MCP instances)
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
-    const feedback = [...pendingFeedback];
+    const feedback = [...readyFeedback];
     if (shouldClear) {
-      pendingFeedback = [];
-      if (feedback.length > 0) {
-        broadcastPendingStatus();
-      }
+      readyFeedback = [];
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ feedback }));
@@ -456,16 +453,22 @@ wss.on("connection", (ws) => {
         pendingFeedback = [];
         broadcastPendingStatus();
 
+        const count = readyFeedback.length;
+
         // Resolve any waiting promises with the batch
-        while (feedbackResolvers.length > 0) {
-          const resolver = feedbackResolvers.shift();
-          resolver(readyFeedback);
+        if (feedbackResolvers.length > 0) {
+          while (feedbackResolvers.length > 0) {
+            const resolver = feedbackResolvers.shift();
+            resolver([...readyFeedback]);
+          }
+          // Clear after resolvers consumed, so get_pending_feedback won't double-deliver
+          readyFeedback = [];
         }
 
         // Acknowledge to browser
         ws.send(JSON.stringify({
           type: "sent_to_claude",
-          count: readyFeedback.length,
+          count: count,
         }));
       }
 
@@ -1069,7 +1072,7 @@ The widget only loads in development (localhost) by default.
 
       // If we don't own the HTTP server, fetch via HTTP
       if (!isHttpServerOwner) {
-        const result = await fetchPendingFeedback(shouldClear);
+        const result = await fetchReadyFeedback(shouldClear);
         if (result && result.feedback) {
           if (result.feedback.length === 0) {
             return {
@@ -1096,12 +1099,9 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const feedback = [...pendingFeedback];
+      const feedback = [...readyFeedback];
       if (shouldClear) {
-        pendingFeedback = [];
-        if (feedback.length > 0) {
-          broadcastPendingStatus();
-        }
+        readyFeedback = [];
       }
 
       if (feedback.length === 0) {
@@ -1256,7 +1256,7 @@ The widget only loads in development (localhost) by default.
         }
 
         // Clear any existing feedback and broadcast request
-        await fetchPendingFeedback(true);
+        await fetchReadyFeedback(true);
         await broadcastViaHttp({
           type: "request_multiple_annotations",
           message: message,
@@ -1269,7 +1269,7 @@ The widget only loads in development (localhost) by default.
         const idleTimeout = 5000; // 5 seconds of no new feedback = done
 
         while (Date.now() - startTime < timeoutSeconds * 1000) {
-          const result = await fetchPendingFeedback(true);
+          const result = await fetchReadyFeedback(true);
           if (result && result.feedback && result.feedback.length > 0) {
             allFeedback.push(...result.feedback);
             lastFeedbackTime = Date.now();
@@ -1307,8 +1307,10 @@ The widget only loads in development (localhost) by default.
         };
       }
 
-      // Clear any existing pending feedback
+      // Clear stale queues
+      readyFeedback = [];
       pendingFeedback = [];
+      broadcastPendingStatus();
 
       // Send request to browser to enter multi-feedback mode
       broadcast({
@@ -1316,46 +1318,53 @@ The widget only loads in development (localhost) by default.
         message: message,
       });
 
-      // Wait for "done" signal from browser
-      const allFeedback = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Timeout waiting for feedback"));
-        }, timeoutSeconds * 1000);
-
-        // Listen for done signal
-        const doneHandler = (data) => {
-          try {
-            const msg = JSON.parse(data.toString());
-            if (msg.type === "feedback_batch_complete") {
-              clearTimeout(timeout);
-              resolve([...pendingFeedback]);
-              pendingFeedback = [];
-            }
-          } catch (e) {
-            // Ignore parse errors
-          }
+      // Check if readyFeedback already has items (early return)
+      if (readyFeedback.length > 0) {
+        const items = [...readyFeedback];
+        readyFeedback = [];
+        return {
+          content: formatFeedbackAsContent(items),
         };
+      }
 
-        // Add listener to all clients
-        for (const client of connectedClients) {
-          client.on("message", doneHandler);
+      // Wait for user to press "Send to Claude" via feedbackResolvers
+      try {
+        const allFeedback = await Promise.race([
+          new Promise((resolve) => {
+            feedbackResolvers.push(resolve);
+          }),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Timeout waiting for feedback")),
+              timeoutSeconds * 1000
+            )
+          ),
+        ]);
+
+        if (allFeedback.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "User clicked Send but no feedback was submitted.",
+              },
+            ],
+          };
         }
-      });
 
-      if (allFeedback.length === 0) {
+        return {
+          content: formatFeedbackAsContent(allFeedback),
+        };
+      } catch (err) {
         return {
           content: [
             {
               type: "text",
-              text: "User clicked Done but no feedback was submitted.",
+              text: err.message,
             },
           ],
         };
       }
-
-      return {
-        content: formatFeedbackAsContent(allFeedback),
-      };
     }
 
     case "get_connection_status": {
