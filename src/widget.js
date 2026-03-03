@@ -11,12 +11,14 @@
 (function() {
   'use strict';
 
-  // Prevent double initialization
+  // Prevent double initialization (JS-level, not DOM-level)
   if (window.__CLAUDE_FEEDBACK_WIDGET__) {
     console.log('[Claude Feedback] Widget already initialized');
     return;
   }
   window.__CLAUDE_FEEDBACK_WIDGET__ = true;
+
+  let widgetStyleEl = null; // Track injected <style> for cleanup
 
   // Configuration
   const WS_URL = '__WEBSOCKET_URL__'; // Injected by server
@@ -641,10 +643,16 @@
   // ============================================
 
   function createWidget() {
+    // Remove stale remnants to make this idempotent
+    const existing = document.getElementById(WIDGET_ID);
+    if (existing) existing.remove();
+    if (widgetStyleEl && widgetStyleEl.parentNode) widgetStyleEl.remove();
+
     // Inject styles
-    const styleEl = document.createElement('style');
-    styleEl.textContent = styles;
-    document.head.appendChild(styleEl);
+    widgetStyleEl = document.createElement('style');
+    widgetStyleEl.textContent = styles;
+    widgetStyleEl.setAttribute('data-claude-feedback', 'true');
+    document.head.appendChild(widgetStyleEl);
 
     // Create container
     const container = document.createElement('div');
@@ -1398,6 +1406,39 @@
   }
 
   // ============================================
+  // Self-Healing: detect DOM removal and re-inject
+  // ============================================
+
+  function ensureWidgetInDOM() {
+    if (!document.getElementById(WIDGET_ID)) {
+      console.log('[Claude Feedback] Widget DOM removed, re-injecting');
+      createWidget();
+      updateButtonState();
+      updatePendingUI();
+    }
+  }
+
+  function startSelfHealing() {
+    // MutationObserver: detect when widget container is removed from body
+    const observer = new MutationObserver((mutations) => {
+      // Quick check: is the widget still in the DOM?
+      if (document.getElementById(WIDGET_ID)) return;
+
+      // Widget is gone — schedule re-injection on next microtask
+      // (allows the framework to finish its DOM update)
+      Promise.resolve().then(ensureWidgetInDOM);
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Fallback interval: handles edge cases the observer misses,
+    // e.g. full document.body replacement where the observer itself is lost
+    setInterval(() => {
+      ensureWidgetInDOM();
+    }, 2000);
+  }
+
+  // ============================================
   // Initialize
   // ============================================
 
@@ -1407,11 +1448,12 @@
       document.addEventListener('DOMContentLoaded', init);
       return;
     }
-    
+
     captureConsoleLogs();
     createWidget();
     connectWebSocket();
-    
+    startSelfHealing();
+
     console.log('[Claude Feedback] Widget initialized');
   }
 
