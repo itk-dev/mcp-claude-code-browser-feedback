@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Browser extension (Chrome MV3 + Firefox MV3) for widget injection without modifying project files
+  - Toggle widget on/off per tab via extension popup
+  - Connection status indicator showing server reachability
+  - Configurable server URL (default: `http://localhost:9877`)
+  - Badge indicator ("ON" in green) on active tabs
+  - Auto-reinjects widget on page navigation when active
+- `setup_extension` MCP tool to help install the browser extension (opens folder + instructions)
+- `destroy()` method on widget (`window.__claudeFeedbackDestroy()`) for clean teardown
+  - Disconnects WebSocket, stops self-healing, removes DOM elements, restores console
+- `port` field in `/status` JSON response
+- Extension tip in `install_widget` and `get_widget_snippet` tool responses
+
 ## [0.4.1] - 2026-01-24
 
 ### Fixed

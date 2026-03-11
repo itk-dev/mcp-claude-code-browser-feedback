@@ -110,6 +110,36 @@ Claude: [Calls: wait_for_multiple_feedback]
 Claude: I received 3 feedback items. Let me address each one...
 ```
 
+## Browser Extension
+
+Instead of modifying project HTML files, you can use the browser extension to toggle the widget on any tab.
+
+### Installation
+
+#### Chrome
+
+1. Navigate to `chrome://extensions`
+2. Enable **Developer Mode** (toggle in top right)
+3. Click **Load unpacked**
+4. Select the `extension/` folder from this repository
+
+#### Firefox
+
+1. Navigate to `about:debugging#/runtime/this-firefox`
+2. Click **Load Temporary Add-on...**
+3. Select `extension/manifest.json` from this repository
+
+Or ask Claude to run the `setup_extension` tool, which opens the folder and shows instructions.
+
+### Usage
+
+1. Click the extension icon in your browser toolbar
+2. Toggle the widget ON for the current tab
+3. The feedback widget appears without any file changes
+4. Toggle OFF to cleanly remove the widget
+
+The extension connects to the MCP server at `http://localhost:9877` by default. You can change the server URL in the extension popup.
+
 ## Available MCP Tools
 
 | Tool | Description |
@@ -122,6 +152,7 @@ Claude: I received 3 feedback items. Let me address each one...
 | `get_connection_status` | Check if browser clients are connected |
 | `request_annotation` | Prompt the user to annotate something specific |
 | `get_widget_snippet` | Get the script tag for manual installation |
+| `setup_extension` | Help install the browser extension (opens folder + instructions) |
 
 ### install_widget Options
 
