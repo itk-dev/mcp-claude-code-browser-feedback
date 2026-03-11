@@ -39,6 +39,12 @@
   const modifierKey = isMac ? 'metaKey' : 'ctrlKey';
   const modifierSymbol = isMac ? '⌘' : 'Ctrl+';
 
+  // References for cleanup (populated by bindEvents / startSelfHealing / connectWebSocket)
+  let _listeners = {};        // Named event listener refs from bindEvents
+  let _selfHealObserver = null;
+  let _selfHealInterval = null;
+  let _wsReconnectTimeout = null;
+
   // ============================================
   // Console Log Capture
   // ============================================
@@ -71,14 +77,15 @@
   }
 
   // Capture unhandled errors
-  window.addEventListener('error', (event) => {
+  function onWindowError(event) {
     consoleLogs.push({
       type: 'error',
       timestamp: new Date().toISOString(),
       message: `${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
       stack: event.error?.stack,
     });
-  });
+  }
+  window.addEventListener('error', onWindowError);
 
   // ============================================
   // Styles
@@ -911,7 +918,7 @@
         updateButtonState();
         console.log('[Claude Feedback] Disconnected from feedback server');
         // Reconnect after delay
-        setTimeout(connectWebSocket, 3000);
+        _wsReconnectTimeout = setTimeout(connectWebSocket, 3000);
       };
       
       ws.onerror = (err) => {
@@ -928,7 +935,7 @@
       };
     } catch (err) {
       console.warn('[Claude Feedback] Failed to connect:', err);
-      setTimeout(connectWebSocket, 3000);
+      _wsReconnectTimeout = setTimeout(connectWebSocket, 3000);
     }
   }
 
@@ -1173,22 +1180,26 @@
       panel.style.transition = 'none';
     });
 
-    document.addEventListener('mousemove', (e) => {
+    function onDocumentMousemove(e) {
       if (!isDragging) return;
       const x = Math.max(0, Math.min(e.clientX - dragOffsetX, window.innerWidth - panel.offsetWidth));
       const y = Math.max(0, Math.min(e.clientY - dragOffsetY, window.innerHeight - panel.offsetHeight));
       panel.style.left = x + 'px';
       panel.style.top = y + 'px';
       panel.style.right = 'auto';
-    });
+    }
+    _listeners.onDocumentMousemove = onDocumentMousemove;
+    document.addEventListener('mousemove', onDocumentMousemove);
 
-    document.addEventListener('mouseup', () => {
+    function onDocumentMouseup() {
       isDragging = false;
       panel.style.transition = '';
-    });
+    }
+    _listeners.onDocumentMouseup = onDocumentMouseup;
+    document.addEventListener('mouseup', onDocumentMouseup);
 
     // Keep panel in viewport on resize
-    window.addEventListener('resize', () => {
+    function onWindowResize() {
       if (!panel.classList.contains('active')) return;
       const rect = panel.getBoundingClientRect();
       if (rect.right > window.innerWidth) {
@@ -1198,7 +1209,9 @@
       if (rect.bottom > window.innerHeight) {
         panel.style.top = Math.max(0, window.innerHeight - panel.offsetHeight) + 'px';
       }
-    });
+    }
+    _listeners.onWindowResize = onWindowResize;
+    window.addEventListener('resize', onWindowResize);
 
     // Overlay mouse events
     overlay.addEventListener('mousemove', (e) => {
@@ -1237,7 +1250,7 @@
     });
 
     // Global keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
+    function onDocumentKeydown(e) {
       // Escape to cancel annotation mode or close panels
       if (e.key === 'Escape') {
         const panel = document.getElementById(`${WIDGET_ID}-panel`);
@@ -1266,7 +1279,9 @@
           startAnnotationMode();
         }
       }
-    });
+    }
+    _listeners.onDocumentKeydown = onDocumentKeydown;
+    document.addEventListener('keydown', onDocumentKeydown);
 
     // Cmd/Ctrl+Enter to send feedback from description textarea
     const descriptionTextarea = document.getElementById(`${WIDGET_ID}-description`);
@@ -1478,7 +1493,7 @@
 
   function startSelfHealing() {
     // MutationObserver: detect when widget container is removed from body
-    const observer = new MutationObserver((mutations) => {
+    _selfHealObserver = new MutationObserver((mutations) => {
       // Quick check: is the widget still in the DOM?
       if (document.getElementById(WIDGET_ID)) return;
 
@@ -1487,14 +1502,89 @@
       Promise.resolve().then(ensureWidgetInDOM);
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    _selfHealObserver.observe(document.body, { childList: true, subtree: true });
 
     // Fallback interval: handles edge cases the observer misses,
     // e.g. full document.body replacement where the observer itself is lost
-    setInterval(() => {
+    _selfHealInterval = setInterval(() => {
       ensureWidgetInDOM();
     }, 2000);
   }
+
+  // ============================================
+  // Destroy - clean teardown for extension toggle
+  // ============================================
+
+  function destroy() {
+    // 1. Stop self-healing so it doesn't re-inject the widget
+    if (_selfHealObserver) {
+      _selfHealObserver.disconnect();
+      _selfHealObserver = null;
+    }
+    if (_selfHealInterval) {
+      clearInterval(_selfHealInterval);
+      _selfHealInterval = null;
+    }
+
+    // 2. Close WebSocket (prevent reconnect by nulling onclose first)
+    if (_wsReconnectTimeout) {
+      clearTimeout(_wsReconnectTimeout);
+      _wsReconnectTimeout = null;
+    }
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close();
+      ws = null;
+    }
+    isConnected = false;
+
+    // 3. Remove document/window event listeners
+    if (_listeners.onDocumentMousemove) {
+      document.removeEventListener('mousemove', _listeners.onDocumentMousemove);
+    }
+    if (_listeners.onDocumentMouseup) {
+      document.removeEventListener('mouseup', _listeners.onDocumentMouseup);
+    }
+    if (_listeners.onDocumentKeydown) {
+      document.removeEventListener('keydown', _listeners.onDocumentKeydown);
+    }
+    if (_listeners.onWindowResize) {
+      window.removeEventListener('resize', _listeners.onWindowResize);
+    }
+    window.removeEventListener('error', onWindowError);
+    _listeners = {};
+
+    // 4. Remove widget container and style element from DOM
+    const container = document.getElementById(WIDGET_ID);
+    if (container) container.remove();
+    if (widgetStyleEl && widgetStyleEl.parentNode) {
+      widgetStyleEl.remove();
+      widgetStyleEl = null;
+    }
+
+    // 5. Restore console methods
+    console.log = originalConsole.log;
+    console.warn = originalConsole.warn;
+    console.error = originalConsole.error;
+
+    // 6. Reset state
+    window.__CLAUDE_FEEDBACK_WIDGET__ = false;
+    delete window.__claudeFeedbackDestroy;
+
+    consoleLogs = [];
+    networkErrors = [];
+    pendingItems = [];
+    selectedElement = null;
+    isAnnotationMode = false;
+    isPendingQueueOpen = false;
+
+    originalConsole.log('[Claude Feedback] Widget destroyed');
+  }
+
+  // Expose destroy for external callers (e.g., browser extension)
+  window.__claudeFeedbackDestroy = destroy;
 
   // ============================================
   // Initialize

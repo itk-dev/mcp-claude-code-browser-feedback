@@ -329,6 +329,7 @@ const httpServer = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         status: "running",
+        port: PORT,
         connectedClients: connectedClients.size,
         pendingFeedback: pendingFeedback.length,
       })
@@ -715,6 +716,16 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
           required: [],
         },
       },
+      {
+        name: "setup_extension",
+        description:
+          "Help the user install the browser extension for widget injection without modifying project files. Opens the extension directory and provides step-by-step instructions for Chrome and Firefox.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
     ],
   };
 });
@@ -884,7 +895,9 @@ The floating "Add annotation" button will appear when you load the page.
 
 Next steps:
 1. Refresh your browser to load the widget
-2. Use \`wait_for_browser_feedback\` to receive feedback from the browser`,
+2. Use \`wait_for_browser_feedback\` to receive feedback from the browser
+
+**Tip:** You can also use the browser extension to toggle the widget without modifying files. Run \`setup_extension\` for instructions.`,
         }],
       };
     }
@@ -1005,6 +1018,8 @@ Users can:
 5. Send the feedback directly to Claude Code
 
 The widget only loads in development (localhost) by default.
+
+**Tip:** You can also use the browser extension to toggle the widget without modifying files. Run \`setup_extension\` for instructions.
       `.trim();
 
       return {
@@ -1556,6 +1571,76 @@ The widget only loads in development (localhost) by default.
                 text: detectedFrom
                   ? `Opened ${url} in your default browser.\n\nDetected from: ${detectedFrom}`
                   : `Opened ${url} in your default browser.`,
+              }],
+            });
+          }
+        });
+      });
+    }
+
+    case "setup_extension": {
+      const extensionDir = path.join(__dirname, '..', 'extension');
+
+      // Check extension directory exists
+      if (!fs.existsSync(extensionDir)) {
+        return {
+          content: [{
+            type: "text",
+            text: `Extension directory not found at ${extensionDir}. Make sure you have the full package installed.`,
+          }],
+        };
+      }
+
+      // Open the extension directory in the file manager
+      const platform = process.platform;
+      let openCommand;
+      let openArgs;
+
+      if (platform === 'darwin') {
+        openCommand = 'open';
+        openArgs = [extensionDir];
+      } else if (platform === 'win32') {
+        openCommand = 'explorer';
+        openArgs = [extensionDir];
+      } else {
+        openCommand = 'xdg-open';
+        openArgs = [extensionDir];
+      }
+
+      return new Promise((resolve) => {
+        execFile(openCommand, openArgs, (error) => {
+          const instructions = `## Browser Extension Setup
+
+The extension directory has been opened in your file manager.
+
+### Chrome
+1. Navigate to \`chrome://extensions\`
+2. Enable **Developer Mode** (toggle in top right)
+3. Click **Load unpacked**
+4. Select the opened folder: \`${extensionDir}\`
+
+### Firefox
+1. Navigate to \`about:debugging#/runtime/this-firefox\`
+2. Click **Load Temporary Add-on...**
+3. Select \`manifest.json\` from: \`${extensionDir}\`
+
+### Usage
+Once installed, click the extension icon in your browser toolbar to toggle the feedback widget on any tab. No need to modify project HTML files.
+
+The extension connects to the MCP server at \`http://localhost:${PORT}\`. You can change this in the extension popup settings.`;
+
+          if (error) {
+            resolve({
+              content: [{
+                type: "text",
+                text: `Could not open file manager: ${error.message}\n\n${instructions}`,
+              }],
+            });
+          } else {
+            resolve({
+              content: [{
+                type: "text",
+                text: instructions,
               }],
             });
           }

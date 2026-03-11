@@ -17,7 +17,7 @@ npm start      # Run the MCP server (node src/server.js)
 
 This is a plain JavaScript (ES modules) project with no TypeScript or build step.
 
-**Two main files:**
+**Main files:**
 
 - `src/server.js` - MCP server combining:
   - HTTP server (serves widget.js, handles /status endpoint)
@@ -29,9 +29,16 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
   - Captures console logs, screenshots (via html2canvas if available), and element metadata
   - Communicates with server via WebSocket
   - `__WEBSOCKET_URL__` placeholder is replaced at serve-time with actual WebSocket URL
+  - Exposes `window.__claudeFeedbackDestroy()` for clean teardown (used by the browser extension)
+
+- `extension/` - Chrome/Firefox MV3 browser extension:
+  - `manifest.json` - Single manifest for both browsers
+  - `background.js` - Service worker tracking per-tab state and badge
+  - `content.js` - Injects/removes widget via `<script src>` tag
+  - `popup/` - Toggle UI with connection status and server URL config
 
 **Data flow:**
-1. Widget injected into user's web app (via `install_widget` tool or manual script tag)
+1. Widget injected into user's web app (via `install_widget` tool, manual script tag, or browser extension)
 2. User selects element and submits feedback
 3. Widget sends feedback via WebSocket to server
 4. Server stores feedback and resolves any pending `wait_for_browser_feedback` promises
@@ -49,6 +56,7 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
 | `request_annotation` | Broadcast prompt to connected browsers asking user to annotate |
 | `get_widget_snippet` | Get manual installation script tag |
 | `open_in_browser` | Open project URL in default browser (auto-detects from .env, docker-compose.yml, etc.) |
+| `setup_extension` | Open extension directory and show Chrome/Firefox install instructions |
 
 ### install_widget Parameters
 
