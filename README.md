@@ -36,7 +36,7 @@ A Model Context Protocol (MCP) server that enables visual browser feedback colle
 
 ```bash
 # Clone the repository
-git clone https://github.com/yepzdk/mcp-claude-code-browser-feedback.git
+git clone https://github.com/itk-dev/mcp-claude-code-browser-feedback.git
 cd mcp-claude-code-browser-feedback
 
 # Install dependencies
@@ -149,9 +149,12 @@ The extension connects to the MCP server at `http://localhost:9877` by default. 
 | `wait_for_browser_feedback` | Block until user submits single feedback |
 | `wait_for_multiple_feedback` | Wait for multiple feedback items (user clicks Done when finished) |
 | `get_pending_feedback` | Get any feedback that's been submitted |
+| `preview_pending_feedback` | Preview pending feedback summaries without consuming them |
+| `delete_pending_feedback` | Delete a specific pending feedback item by ID |
 | `get_connection_status` | Check if browser clients are connected |
 | `request_annotation` | Prompt the user to annotate something specific |
 | `get_widget_snippet` | Get the script tag for manual installation |
+| `open_in_browser` | Open project URL in default browser (auto-detects from config files) |
 | `setup_extension` | Help install the browser extension (opens folder + instructions) |
 
 ### install_widget Options
@@ -164,8 +167,13 @@ The extension connects to the MCP server at `http://localhost:9877` by default. 
   // Optional: project directory to search
   "project_dir": "/path/to/project",
 
-  // Optional: only load on localhost (default: true)
-  "dev_only": true
+  // Optional: only load on allowed hostnames (default: true)
+  "dev_only": true,
+
+  // Optional: hostnames/patterns allowed when dev_only is true
+  // Supports '*' wildcard (e.g., '*.local.itkdev.dk')
+  // Defaults to: localhost, 127.0.0.1, *.local, *.local.*, *.test, *.dev, *.ddev.site
+  "allowed_hostnames": ["localhost", "*.local.itkdev.dk"]
 }
 ```
 
@@ -176,6 +184,8 @@ The extension connects to the MCP server at `http://localhost:9877` by default. 
 - `app/index.html`
 - `dist/index.html`
 - `build/index.html`
+- `www/index.html`
+- `static/index.html`
 
 ### Manual Installation (Alternative)
 
@@ -202,7 +212,7 @@ Or for development-only loading:
 - **Draggable dialog** - Move the feedback panel anywhere on screen
 - **Minimizable** - Collapse the panel to just the header bar
 - **Collapsible element details** - Technical info hidden by default
-- **Screenshot capture** - Automatic viewport capture (enhanced with html2canvas if available)
+- **Screenshot capture** - Automatic viewport capture using html2canvas (bundled)
 - **Console log capture** - Includes recent console messages
 - **Multi-feedback mode** - Submit multiple annotations before sending to Claude
 
@@ -214,16 +224,9 @@ Or for development-only loading:
 |----------|---------|-------------|
 | `FEEDBACK_PORT` | `9877` | Port for HTTP/WebSocket server |
 
-## Advanced: Screenshot Capture
+## Screenshot Capture
 
-For better screenshot quality, include html2canvas in your app:
-
-```html
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="http://localhost:9877/widget.js"></script>
-```
-
-The widget will automatically use html2canvas if available.
+The widget automatically captures viewport screenshots using html2canvas, which is bundled with the MCP server and loaded on demand. No extra setup is needed.
 
 ## Troubleshooting
 
@@ -257,10 +260,10 @@ FEEDBACK_PORT=9878 node src/server.js
 
 ## Security Notes
 
-- The server only listens on `localhost` by default
 - The widget only connects to `localhost`
 - No data is sent to external servers
 - All communication stays on your machine
+- **Note:** The HTTP/WebSocket server listens on all interfaces (`0.0.0.0`) by default. If you need to restrict this, use a firewall or bind to a specific interface via a reverse proxy.
 
 ## License
 
