@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Claude Code plugin wrapper (`.claude-plugin/plugin.json` + `.mcp.json`) for direct installation via `claude plugin add`
 - Browser extension (Chrome MV3 + Firefox MV3) for widget injection without modifying project files
   - Toggle widget on/off per tab via extension popup
   - Connection status indicator showing server reachability
