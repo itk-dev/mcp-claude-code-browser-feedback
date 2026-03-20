@@ -110,6 +110,13 @@ Claude: [Calls: wait_for_multiple_feedback]
 Claude: I received 3 feedback items. Let me address each one...
 ```
 
+### Offline Export
+
+The widget works without a server connection. When offline, feedback is stored locally and can be exported:
+
+- **Export Markdown** - Click "Pending" to open the queue, then "Export Markdown" to download a `.md` file
+- **Create GitHub Issue** - Click "Create GitHub Issue" to open a pre-filled issue in your browser (you'll be prompted for the repository on first use, stored in localStorage)
+
 ## Browser Extension
 
 Instead of modifying project HTML files, you can use the browser extension to toggle the widget on any tab.
@@ -215,6 +222,10 @@ Or for development-only loading:
 - **Screenshot capture** - Automatic viewport capture using html2canvas (bundled)
 - **Console log capture** - Includes recent console messages
 - **Multi-feedback mode** - Submit multiple annotations before sending to Claude
+- **Shadow DOM isolation** - Widget styles are isolated from host page CSS
+- **Offline mode** - Annotate elements even without a server connection; feedback is stored locally
+- **Export to Markdown** - Download pending feedback as a structured Markdown file
+- **Export to GitHub Issue** - Open a pre-filled GitHub issue directly from the widget
 
 ## Configuration
 

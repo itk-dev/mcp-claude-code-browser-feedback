@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Shadow DOM isolation for widget - host page CSS no longer leaks into the widget UI
+- Tooltip selector truncation - long CSS selectors in hover tooltip are now truncated to 2 levels with `... >` prefix
+- Improved tooltip positioning - tooltip moves below element when it would go above the viewport, and is clamped horizontally
+- Full DOM path selector (`fullSelector`) included in feedback element metadata for AI agents
+- Offline annotation support - widget now works without a server connection, storing feedback locally
+- Export to Markdown - download all pending feedback as a structured `.md` file from the queue panel
+- Export to GitHub Issue - open a pre-filled GitHub issue with feedback content (URL-based, no token needed)
+- GitHub repository config stored in `localStorage` for quick re-use
 - Claude Code plugin wrapper (`.claude-plugin/plugin.json` + `.mcp.json`) for direct installation via `claude plugin add`
 - Browser extension (Chrome MV3 + Firefox MV3) for widget injection without modifying project files
   - Toggle widget on/off per tab via extension popup

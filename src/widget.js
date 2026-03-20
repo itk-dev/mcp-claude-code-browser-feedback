@@ -18,7 +18,7 @@
   }
   window.__CLAUDE_FEEDBACK_WIDGET__ = true;
 
-  let widgetStyleEl = null; // Track injected <style> for cleanup
+  let shadowRoot = null;    // Shadow DOM root for style isolation
 
   // Configuration
   const WS_URL = '__WEBSOCKET_URL__'; // Injected by server
@@ -32,12 +32,18 @@
   let consoleLogs = [];
   let networkErrors = [];
   let pendingItems = [];
+  let localPendingItems = [];  // Client-side storage for offline mode
   let isPendingQueueOpen = false;
 
   // Platform detection for keyboard shortcuts
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const modifierKey = isMac ? 'metaKey' : 'ctrlKey';
   const modifierSymbol = isMac ? '⌘' : 'Ctrl+';
+
+  // Helper to get widget elements from shadow root
+  function getEl(id) {
+    return shadowRoot ? shadowRoot.getElementById(id) : null;
+  }
 
   // References for cleanup (populated by bindEvents / startSelfHealing / connectWebSocket)
   let _listeners = {};        // Named event listener refs from bindEvents
@@ -92,7 +98,17 @@
   // ============================================
 
   const styles = `
-    #${WIDGET_ID} * {
+    :host {
+      all: initial;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 0;
+      height: 0;
+      z-index: 2147483647;
+    }
+
+    *, *::before, *::after {
       box-sizing: border-box;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
@@ -249,6 +265,32 @@
       color: #374151;
     }
 
+    #${WIDGET_ID}-queue-footer {
+      display: none;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid #e5e7eb;
+      background: #f9fafb;
+    }
+
+    #${WIDGET_ID}-queue-footer button {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid #e5e7eb;
+      background: white;
+      color: #374151;
+      transition: all 0.15s ease;
+    }
+
+    #${WIDGET_ID}-queue-footer button:hover {
+      background: #f3f4f6;
+      border-color: #d1d5db;
+    }
+
     #${WIDGET_ID}-queue-list {
       overflow-y: auto;
       flex: 1;
@@ -357,7 +399,9 @@
       pointer-events: none;
       display: none;
       max-width: 300px;
-      word-break: break-all;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     #${WIDGET_ID}-panel {
@@ -653,17 +697,19 @@
     // Remove stale remnants to make this idempotent
     const existing = document.getElementById(WIDGET_ID);
     if (existing) existing.remove();
-    if (widgetStyleEl && widgetStyleEl.parentNode) widgetStyleEl.remove();
 
-    // Inject styles
-    widgetStyleEl = document.createElement('style');
-    widgetStyleEl.textContent = styles;
-    widgetStyleEl.setAttribute('data-claude-feedback', 'true');
-    document.head.appendChild(widgetStyleEl);
+    // Create host element and attach shadow root
+    const host = document.createElement('div');
+    host.id = WIDGET_ID;
+    shadowRoot = host.attachShadow({ mode: 'open' });
 
-    // Create container
+    // Inject styles into shadow root
+    const styleEl = document.createElement('style');
+    styleEl.textContent = styles;
+    shadowRoot.appendChild(styleEl);
+
+    // Create widget content inside shadow root
     const container = document.createElement('div');
-    container.id = WIDGET_ID;
     container.innerHTML = `
       <div id="${WIDGET_ID}-button-area" style="position: fixed; bottom: 20px; right: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">
         <!-- State 1: Single button (shown when no pending items) -->
@@ -697,6 +743,10 @@
         </div>
         <div id="${WIDGET_ID}-queue-list">
           <div id="${WIDGET_ID}-queue-empty">No pending feedback</div>
+        </div>
+        <div id="${WIDGET_ID}-queue-footer" style="display: none;">
+          <button id="${WIDGET_ID}-export-md-btn">Export Markdown</button>
+          <button id="${WIDGET_ID}-export-gh-btn">Create GitHub Issue</button>
         </div>
       </div>
 
@@ -754,7 +804,12 @@
 
     `;
 
-    document.body.appendChild(container);
+    // Move all children from container into shadow root
+    while (container.firstChild) {
+      shadowRoot.appendChild(container.firstChild);
+    }
+
+    document.body.appendChild(host);
     bindEvents();
   }
 
@@ -785,6 +840,35 @@
     return selector;
   }
 
+  function getTruncatedSelector(el, maxDepth = 2) {
+    const parts = [];
+    let current = el;
+    let depth = 0;
+    let hasMore = false;
+
+    while (current && current !== document.documentElement && depth < maxDepth) {
+      parts.unshift(getElementSelector(current));
+      current = current.parentElement;
+      depth++;
+    }
+
+    if (current && current !== document.documentElement) {
+      hasMore = true;
+    }
+
+    return (hasMore ? '... > ' : '') + parts.join(' > ');
+  }
+
+  function getFullSelector(el) {
+    const parts = [];
+    let current = el;
+    while (current && current !== document.documentElement) {
+      parts.unshift(getElementSelector(current));
+      current = current.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
   function getElementInfo(el) {
     const rect = el.getBoundingClientRect();
     const styles = window.getComputedStyle(el);
@@ -794,6 +878,7 @@
       id: el.id || null,
       className: el.className || null,
       selector: getElementSelector(el),
+      fullSelector: getFullSelector(el),
       text: el.textContent?.slice(0, 200) || null,
       innerHTML: el.innerHTML?.slice(0, 500) || null,
       outerHTML: el.outerHTML?.slice(0, 1000) || null,
@@ -861,17 +946,19 @@
     try {
       await loadHtml2Canvas();
     } catch (err) {
-      console.warn('[Claude Feedback] Could not load html2canvas:', err);
+      console.warn('[Claude Feedback] Could not load html2canvas:', err?.message || err);
       return null;
     }
 
     if (typeof html2canvas === 'undefined') return null;
 
     try {
+      const widgetHost = document.getElementById(WIDGET_ID);
       const canvas = await html2canvas(document.body, {
         logging: false,
         useCORS: true,
         scale: 1,
+        ignoreElements: (el) => el === widgetHost,
       });
 
       // If a target element is provided, crop to its bounding rect + padding
@@ -894,7 +981,7 @@
 
       return canvas.toDataURL('image/jpeg', 0.7);
     } catch (err) {
-      console.warn('[Claude Feedback] html2canvas failed:', err);
+      console.warn('[Claude Feedback] html2canvas failed:', err?.message || err);
       return null;
     }
   }
@@ -954,24 +1041,35 @@
     return date.toLocaleDateString();
   }
 
+  function getAllPendingItems() {
+    return isConnected ? pendingItems : localPendingItems;
+  }
+
   // Update the button group visibility and queue list
   function updatePendingUI() {
-    const mainButton = document.getElementById(`${WIDGET_ID}-button`);
-    const buttonGroup = document.getElementById(`${WIDGET_ID}-button-group`);
-    const pendingCount = document.getElementById(`${WIDGET_ID}-pending-count`);
-    const queueList = document.getElementById(`${WIDGET_ID}-queue-list`);
-    const queueEmpty = document.getElementById(`${WIDGET_ID}-queue-empty`);
+    const mainButton = getEl(`${WIDGET_ID}-button`);
+    const buttonGroup = getEl(`${WIDGET_ID}-button-group`);
+    const pendingCount = getEl(`${WIDGET_ID}-pending-count`);
+    const queueList = getEl(`${WIDGET_ID}-queue-list`);
+    const queueEmpty = getEl(`${WIDGET_ID}-queue-empty`);
+    const sendBtnGroup = getEl(`${WIDGET_ID}-send-btn-group`);
+    const exportFooter = getEl(`${WIDGET_ID}-queue-footer`);
 
-    const hasPending = pendingItems.length > 0;
+    const items = getAllPendingItems();
+    const hasPending = items.length > 0;
 
     // Toggle between single button and button group
     if (mainButton) mainButton.style.display = hasPending ? 'none' : 'flex';
     if (buttonGroup) buttonGroup.classList.toggle('visible', hasPending);
     const prevCount = pendingCount ? parseInt(pendingCount.textContent, 10) || 0 : 0;
-    if (pendingCount) pendingCount.textContent = pendingItems.length;
+    if (pendingCount) pendingCount.textContent = items.length;
+
+    // Hide Send button when offline, show export footer when items exist
+    if (sendBtnGroup) sendBtnGroup.style.display = isConnected ? '' : 'none';
+    if (exportFooter) exportFooter.style.display = hasPending ? 'flex' : 'none';
 
     // Subtle bump animation when count increases
-    if (pendingCount && pendingItems.length > prevCount) {
+    if (pendingCount && items.length > prevCount) {
       pendingCount.style.animation = 'none';
       // Force reflow to restart animation
       void pendingCount.offsetWidth;
@@ -982,16 +1080,16 @@
     if (!hasPending) closeQueuePanel();
 
     if (queueList) {
-      // Remove existing items (but keep the empty message element)
+      // Remove existing items (but keep the empty message element and footer)
       const existingItems = queueList.querySelectorAll(`.${WIDGET_ID}-queue-item`);
       existingItems.forEach(item => item.remove());
 
-      if (pendingItems.length === 0) {
+      if (items.length === 0) {
         if (queueEmpty) queueEmpty.style.display = 'block';
       } else {
         if (queueEmpty) queueEmpty.style.display = 'none';
 
-        pendingItems.forEach(item => {
+        items.forEach(item => {
           const itemEl = document.createElement('div');
           itemEl.className = `${WIDGET_ID}-queue-item`;
           itemEl.dataset.id = item.id;
@@ -1001,7 +1099,7 @@
 
           const selectorEl = document.createElement('div');
           selectorEl.className = `${WIDGET_ID}-queue-item-selector`;
-          selectorEl.textContent = item.selector || 'Unknown element';
+          selectorEl.textContent = item.selector || item.element?.selector || 'Unknown element';
           contentEl.appendChild(selectorEl);
 
           if (item.description) {
@@ -1036,7 +1134,7 @@
 
   // Toggle queue panel visibility
   function toggleQueuePanel() {
-    const panel = document.getElementById(`${WIDGET_ID}-queue-panel`);
+    const panel = getEl(`${WIDGET_ID}-queue-panel`);
     if (panel) {
       isPendingQueueOpen = !isPendingQueueOpen;
       panel.classList.toggle('active', isPendingQueueOpen);
@@ -1045,7 +1143,7 @@
 
   // Close queue panel
   function closeQueuePanel() {
-    const panel = document.getElementById(`${WIDGET_ID}-queue-panel`);
+    const panel = getEl(`${WIDGET_ID}-queue-panel`);
     if (panel) {
       isPendingQueueOpen = false;
       panel.classList.remove('active');
@@ -1054,11 +1152,14 @@
 
   // Delete a pending item
   function deletePendingItem(id) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'delete_feedback',
         id: id,
       }));
+    } else {
+      localPendingItems = localPendingItems.filter(item => item.id !== id);
+      updatePendingUI();
     }
   }
 
@@ -1088,13 +1189,13 @@
   }
 
   function updateButtonState() {
-    const button = document.getElementById(`${WIDGET_ID}-button`);
-    const shortcutHint = document.getElementById(`${WIDGET_ID}-button-shortcut`);
+    const button = getEl(`${WIDGET_ID}-button`);
+    const shortcutHint = getEl(`${WIDGET_ID}-button-shortcut`);
     if (button) {
       button.classList.toggle('disconnected', !isConnected);
     }
     if (shortcutHint) {
-      shortcutHint.style.display = isConnected ? 'inline' : 'none';
+      shortcutHint.style.display = 'inline';
     }
   }
 
@@ -1105,29 +1206,25 @@
   let hoveredElement = null;
 
   function bindEvents() {
-    const button = document.getElementById(`${WIDGET_ID}-button`);
-    const overlay = document.getElementById(`${WIDGET_ID}-overlay`);
-    const highlight = document.getElementById(`${WIDGET_ID}-highlight`);
-    const tooltip = document.getElementById(`${WIDGET_ID}-tooltip`);
-    const panel = document.getElementById(`${WIDGET_ID}-panel`);
-    const panelHeader = document.getElementById(`${WIDGET_ID}-panel-header`);
-    const minimizeBtn = document.getElementById(`${WIDGET_ID}-panel-minimize`);
-    const closeBtn = document.getElementById(`${WIDGET_ID}-panel-close`);
-    const cancelBtn = document.getElementById(`${WIDGET_ID}-cancel-btn`);
-    const sendBtn = document.getElementById(`${WIDGET_ID}-send-btn`);
-    const elementInfoToggle = document.getElementById(`${WIDGET_ID}-element-info-toggle`);
-    const elementInfoWrapper = document.getElementById(`${WIDGET_ID}-element-info-wrapper`);
-    const queueCloseBtn = document.getElementById(`${WIDGET_ID}-queue-close`);
-    const addBtn = document.getElementById(`${WIDGET_ID}-add-btn`);
-    const pendingBtn = document.getElementById(`${WIDGET_ID}-pending-btn`);
-    const sendBtnGroup = document.getElementById(`${WIDGET_ID}-send-btn-group`);
+    const button = getEl(`${WIDGET_ID}-button`);
+    const overlay = getEl(`${WIDGET_ID}-overlay`);
+    const highlight = getEl(`${WIDGET_ID}-highlight`);
+    const tooltip = getEl(`${WIDGET_ID}-tooltip`);
+    const panel = getEl(`${WIDGET_ID}-panel`);
+    const panelHeader = getEl(`${WIDGET_ID}-panel-header`);
+    const minimizeBtn = getEl(`${WIDGET_ID}-panel-minimize`);
+    const closeBtn = getEl(`${WIDGET_ID}-panel-close`);
+    const cancelBtn = getEl(`${WIDGET_ID}-cancel-btn`);
+    const sendBtn = getEl(`${WIDGET_ID}-send-btn`);
+    const elementInfoToggle = getEl(`${WIDGET_ID}-element-info-toggle`);
+    const elementInfoWrapper = getEl(`${WIDGET_ID}-element-info-wrapper`);
+    const queueCloseBtn = getEl(`${WIDGET_ID}-queue-close`);
+    const addBtn = getEl(`${WIDGET_ID}-add-btn`);
+    const pendingBtn = getEl(`${WIDGET_ID}-pending-btn`);
+    const sendBtnGroup = getEl(`${WIDGET_ID}-send-btn-group`);
 
     // "+ Add" button — same as main button
     addBtn.addEventListener('click', () => {
-      if (!isConnected) {
-        alert('Not connected to Claude Code feedback server.');
-        return;
-      }
       startAnnotationMode();
     });
 
@@ -1146,6 +1243,45 @@
     // Queue panel close button
     queueCloseBtn.addEventListener('click', closeQueuePanel);
 
+    // Export Markdown button
+    const exportMdBtn = getEl(`${WIDGET_ID}-export-md-btn`);
+    exportMdBtn.addEventListener('click', () => {
+      const items = getAllPendingItems();
+      if (items.length === 0) return;
+      const md = generateMarkdown(items);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      downloadFile(md, `feedback-${timestamp}.md`, 'text/markdown');
+    });
+
+    // Export GitHub Issue button
+    const exportGhBtn = getEl(`${WIDGET_ID}-export-gh-btn`);
+    exportGhBtn.addEventListener('click', () => {
+      const items = getAllPendingItems();
+      if (items.length === 0) return;
+
+      let repo = localStorage.getItem('claude-feedback-github-repo');
+      if (!repo) {
+        repo = prompt('Enter GitHub repository (owner/repo):');
+        if (!repo || !repo.includes('/')) {
+          showError('Invalid repository format. Use owner/repo.');
+          return;
+        }
+        localStorage.setItem('claude-feedback-github-repo', repo);
+      }
+
+      const md = generateMarkdown(items);
+      const title = `Browser Feedback: ${items.length} item${items.length !== 1 ? 's' : ''} from ${new URL(items[0]?.url || window.location.href).hostname}`;
+
+      // Truncate body to stay within URL length limits (~6000 chars)
+      const maxBodyLength = 6000;
+      const body = md.length > maxBodyLength
+        ? md.slice(0, maxBodyLength) + '\n\n... (truncated, export as Markdown for full report)'
+        : md;
+
+      const url = `https://github.com/${repo}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
+      window.open(url, '_blank');
+    });
+
     // Element info toggle
     elementInfoToggle.addEventListener('click', () => {
       elementInfoWrapper.classList.toggle('expanded');
@@ -1153,10 +1289,6 @@
 
     // Main button click
     button.addEventListener('click', () => {
-      if (!isConnected) {
-        alert('Not connected to Claude Code feedback server. Make sure the MCP server is running.');
-        return;
-      }
       startAnnotationMode();
     });
 
@@ -1222,7 +1354,7 @@
       const el = document.elementFromPoint(e.clientX, e.clientY);
       overlay.style.pointerEvents = 'auto';
       
-      if (el && el.id !== WIDGET_ID && !el.closest(`#${WIDGET_ID}`)) {
+      if (el && !el.closest(`#${WIDGET_ID}`)) {
         hoveredElement = el;
         const rect = el.getBoundingClientRect();
         
@@ -1233,9 +1365,18 @@
         highlight.style.height = rect.height + 'px';
         
         tooltip.style.display = 'block';
-        tooltip.style.top = (rect.top - 40) + 'px';
-        tooltip.style.left = rect.left + 'px';
-        tooltip.textContent = getElementSelector(el);
+        tooltip.textContent = getTruncatedSelector(el);
+
+        // Position tooltip above element, or below if it would go off-screen
+        if (rect.top - 40 < 0) {
+          tooltip.style.top = (rect.bottom + 8) + 'px';
+        } else {
+          tooltip.style.top = (rect.top - 40) + 'px';
+        }
+
+        // Clamp horizontal position to keep tooltip on screen
+        const tooltipLeft = Math.max(4, Math.min(rect.left, window.innerWidth - 308));
+        tooltip.style.left = tooltipLeft + 'px';
       }
     });
 
@@ -1253,7 +1394,7 @@
     function onDocumentKeydown(e) {
       // Escape to cancel annotation mode or close panels
       if (e.key === 'Escape') {
-        const panel = document.getElementById(`${WIDGET_ID}-panel`);
+        const panel = getEl(`${WIDGET_ID}-panel`);
         if (panel && panel.classList.contains('active')) {
           hidePanel();
           return;
@@ -1274,7 +1415,7 @@
         const isInputFocused = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)
           || document.activeElement.isContentEditable;
 
-        if (!isInputFocused && isConnected && !isAnnotationMode) {
+        if (!isInputFocused && !isAnnotationMode) {
           e.preventDefault();
           startAnnotationMode();
         }
@@ -1284,7 +1425,7 @@
     document.addEventListener('keydown', onDocumentKeydown);
 
     // Cmd/Ctrl+Enter to send feedback from description textarea
-    const descriptionTextarea = document.getElementById(`${WIDGET_ID}-description`);
+    const descriptionTextarea = getEl(`${WIDGET_ID}-description`);
     descriptionTextarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e[modifierKey]) {
         e.preventDefault();
@@ -1300,25 +1441,25 @@
 
   function startAnnotationMode() {
     isAnnotationMode = true;
-    document.getElementById(`${WIDGET_ID}-overlay`).classList.add('active');
-    document.getElementById(`${WIDGET_ID}-instructions`).classList.add('active');
+    getEl(`${WIDGET_ID}-overlay`).classList.add('active');
+    getEl(`${WIDGET_ID}-instructions`).classList.add('active');
   }
 
   function stopAnnotationMode() {
     isAnnotationMode = false;
     hoveredElement = null;
-    document.getElementById(`${WIDGET_ID}-overlay`).classList.remove('active');
-    document.getElementById(`${WIDGET_ID}-instructions`).classList.remove('active');
-    document.getElementById(`${WIDGET_ID}-highlight`).style.display = 'none';
-    document.getElementById(`${WIDGET_ID}-tooltip`).style.display = 'none';
+    getEl(`${WIDGET_ID}-overlay`).classList.remove('active');
+    getEl(`${WIDGET_ID}-instructions`).classList.remove('active');
+    getEl(`${WIDGET_ID}-highlight`).style.display = 'none';
+    getEl(`${WIDGET_ID}-tooltip`).style.display = 'none';
   }
 
   async function showPanel() {
-    const panel = document.getElementById(`${WIDGET_ID}-panel`);
-    const screenshotEl = document.getElementById(`${WIDGET_ID}-screenshot-preview`);
-    const elementInfoEl = document.getElementById(`${WIDGET_ID}-element-info`);
-    const elementInfoWrapper = document.getElementById(`${WIDGET_ID}-element-info-wrapper`);
-    const minimizeBtn = document.getElementById(`${WIDGET_ID}-panel-minimize`);
+    const panel = getEl(`${WIDGET_ID}-panel`);
+    const screenshotEl = getEl(`${WIDGET_ID}-screenshot-preview`);
+    const elementInfoEl = getEl(`${WIDGET_ID}-element-info`);
+    const elementInfoWrapper = getEl(`${WIDGET_ID}-element-info-wrapper`);
+    const minimizeBtn = getEl(`${WIDGET_ID}-panel-minimize`);
 
     // Defensive check - ensure panel exists
     if (!panel) {
@@ -1337,7 +1478,7 @@
     if (elementInfoWrapper) elementInfoWrapper.classList.remove('expanded');
 
     // Update logs count text (preserve checkbox state)
-    const logsText = document.getElementById(`${WIDGET_ID}-include-logs-text`);
+    const logsText = getEl(`${WIDGET_ID}-include-logs-text`);
     if (logsText) {
       logsText.textContent = `Include console logs (${consoleLogs.length} captured)`;
     }
@@ -1352,7 +1493,7 @@
     }
 
     // Show screenshot status instead of preview (screenshot is captured on submit)
-    const includeScreenshotCheckbox = document.getElementById(`${WIDGET_ID}-include-screenshot`);
+    const includeScreenshotCheckbox = getEl(`${WIDGET_ID}-include-screenshot`);
     if (includeScreenshotCheckbox && includeScreenshotCheckbox.checked) {
       screenshotEl.alt = 'Screenshot will be captured when submitted';
       screenshotEl.removeAttribute('src');
@@ -1362,12 +1503,12 @@
     }
 
     panel.classList.add('active');
-    document.getElementById(`${WIDGET_ID}-description`).focus();
+    getEl(`${WIDGET_ID}-description`).focus();
   }
 
   function hidePanel() {
-    document.getElementById(`${WIDGET_ID}-panel`).classList.remove('active');
-    document.getElementById(`${WIDGET_ID}-description`).value = '';
+    getEl(`${WIDGET_ID}-panel`).classList.remove('active');
+    getEl(`${WIDGET_ID}-description`).value = '';
     selectedElement = null;
   }
 
@@ -1378,31 +1519,10 @@
       return;
     }
 
-    // Check WebSocket connection
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn('[Claude Feedback] WebSocket not connected, attempting reconnect...');
-      showError('Connection lost. Reconnecting...');
-
-      // Try to reconnect
-      if (!ws || ws.readyState === WebSocket.CLOSED) {
-        connectWebSocket();
-      }
-
-      // Wait a bit for reconnection, then retry once
-      setTimeout(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          addItem();
-        } else {
-          showError('Could not reconnect. Please try again.');
-        }
-      }, 1000);
-      return;
-    }
-
-    const description = document.getElementById(`${WIDGET_ID}-description`)?.value || '';
-    const includeLogs = document.getElementById(`${WIDGET_ID}-include-logs`)?.checked ?? true;
-    const includeStyles = document.getElementById(`${WIDGET_ID}-include-styles`)?.checked ?? true;
-    const includeScreenshot = document.getElementById(`${WIDGET_ID}-include-screenshot`)?.checked ?? true;
+    const description = getEl(`${WIDGET_ID}-description`)?.value || '';
+    const includeLogs = getEl(`${WIDGET_ID}-include-logs`)?.checked ?? true;
+    const includeStyles = getEl(`${WIDGET_ID}-include-styles`)?.checked ?? true;
+    const includeScreenshot = getEl(`${WIDGET_ID}-include-screenshot`)?.checked ?? true;
 
     const elementInfo = getElementInfo(selectedElement);
     if (!includeStyles) {
@@ -1427,21 +1547,104 @@
       consoleLogs: includeLogs ? consoleLogs.slice(-20) : [],
     };
 
-    try {
-      ws.send(JSON.stringify({
-        type: 'feedback',
-        payload: feedback,
-      }));
-
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Online: send via WebSocket
+      try {
+        ws.send(JSON.stringify({
+          type: 'feedback',
+          payload: feedback,
+        }));
+        hidePanel();
+      } catch (err) {
+        console.error('[Claude Feedback] Failed to add item:', err);
+        showError('Failed to send. Saved locally.');
+        localPendingItems.push(feedback);
+        updatePendingUI();
+        hidePanel();
+      }
+    } else {
+      // Offline: store locally
+      localPendingItems.push(feedback);
+      updatePendingUI();
       hidePanel();
-    } catch (err) {
-      console.error('[Claude Feedback] Failed to add item:', err);
-      showError('Failed to add item. Please try again.');
+      showSuccess('Item saved locally (offline)');
     }
   }
 
+  // ============================================
+  // Export Helpers
+  // ============================================
+
+  function generateMarkdown(items) {
+    const now = new Date().toISOString();
+    const url = items[0]?.url || window.location.href;
+    let md = `# Browser Feedback Report\n\n`;
+    md += `- **URL:** ${url}\n`;
+    md += `- **Date:** ${now}\n`;
+    md += `- **User Agent:** ${navigator.userAgent}\n`;
+    md += `- **Items:** ${items.length}\n\n`;
+    md += `---\n\n`;
+
+    items.forEach((item, i) => {
+      md += `## Item ${i + 1}\n\n`;
+
+      const selector = item.selector || item.element?.selector || 'Unknown';
+      const fullSelector = item.element?.fullSelector || selector;
+      md += `**Element:** \`${selector}\`\n\n`;
+      md += `**Full path:** \`${fullSelector}\`\n\n`;
+
+      if (item.description) {
+        md += `**Description:** ${item.description}\n\n`;
+      }
+
+      if (item.element?.outerHTML) {
+        md += `**HTML:**\n\`\`\`html\n${item.element.outerHTML}\n\`\`\`\n\n`;
+      }
+
+      if (item.element?.computedStyles) {
+        const styles = item.element.computedStyles;
+        const styleLines = Object.entries(styles)
+          .filter(([, v]) => v)
+          .map(([k, v]) => `  ${k}: ${v}`)
+          .join('\n');
+        if (styleLines) {
+          md += `**Computed Styles:**\n\`\`\`\n${styleLines}\n\`\`\`\n\n`;
+        }
+      }
+
+      if (item.consoleLogs && item.consoleLogs.length > 0) {
+        md += `**Console Logs (${item.consoleLogs.length}):**\n\`\`\`\n`;
+        item.consoleLogs.forEach(log => {
+          md += `[${log.type}] ${log.message}\n`;
+        });
+        md += `\`\`\`\n\n`;
+      }
+
+      if (item.screenshot) {
+        md += `**Screenshot:** Captured (${Math.round(item.screenshot.length / 1024)}KB base64)\n\n`;
+      }
+
+      md += `---\n\n`;
+    });
+
+    return md;
+  }
+
+  function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    // Append to document.body (not shadow root) for download to work
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function showSuccess(message) {
-    const el = document.getElementById(`${WIDGET_ID}-success`);
+    const el = getEl(`${WIDGET_ID}-success`);
     if (el) {
       el.textContent = message;
       el.style.display = 'block';
@@ -1460,7 +1663,7 @@
   }
 
   function showError(message) {
-    const el = document.getElementById(`${WIDGET_ID}-error`);
+    const el = getEl(`${WIDGET_ID}-error`);
     if (el) {
       el.textContent = '✗ ' + message;
       el.style.display = 'block';
@@ -1556,13 +1759,10 @@
     window.removeEventListener('error', onWindowError);
     _listeners = {};
 
-    // 4. Remove widget container and style element from DOM
-    const container = document.getElementById(WIDGET_ID);
-    if (container) container.remove();
-    if (widgetStyleEl && widgetStyleEl.parentNode) {
-      widgetStyleEl.remove();
-      widgetStyleEl = null;
-    }
+    // 4. Remove widget host element (removes shadow root and all contents)
+    const host = document.getElementById(WIDGET_ID);
+    if (host) host.remove();
+    shadowRoot = null;
 
     // 5. Restore console methods
     console.log = originalConsole.log;
@@ -1576,6 +1776,7 @@
     consoleLogs = [];
     networkErrors = [];
     pendingItems = [];
+    localPendingItems = [];
     selectedElement = null;
     isAnnotationMode = false;
     isPendingQueueOpen = false;

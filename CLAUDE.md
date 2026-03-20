@@ -26,10 +26,13 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
 
 - `src/widget.js` - Browser-side widget that:
   - Injects UI for element selection and feedback submission
+  - Uses Shadow DOM for style isolation from host page CSS
   - Captures console logs, screenshots (via html2canvas if available), and element metadata
-  - Communicates with server via WebSocket
+  - Communicates with server via WebSocket (works offline with local storage fallback)
+  - Supports export to Markdown file and GitHub Issue (URL-based, no token)
   - `__WEBSOCKET_URL__` placeholder is replaced at serve-time with actual WebSocket URL
   - Exposes `window.__claudeFeedbackDestroy()` for clean teardown (used by the browser extension)
+  - Internal DOM access uses `getEl()` helper (queries shadow root, not document)
 
 - `extension/` - Chrome/Firefox MV3 browser extension:
   - `manifest.json` - Single manifest for both browsers
@@ -37,12 +40,16 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
   - `content.js` - Injects/removes widget via `<script src>` tag
   - `popup/` - Toggle UI with connection status and server URL config
 
-**Data flow:**
+**Data flow (online):**
 1. Widget injected into user's web app (via `install_widget` tool, manual script tag, or browser extension)
 2. User selects element and submits feedback
 3. Widget sends feedback via WebSocket to server
 4. Server stores feedback and resolves any pending `wait_for_browser_feedback` promises
 5. Claude receives structured feedback (element info, screenshot, console logs, description)
+
+**Data flow (offline):**
+1. Widget works without server connection — annotation stored in `localPendingItems`
+2. User exports via Markdown download or GitHub Issue URL from queue panel
 
 ## MCP Tools
 
