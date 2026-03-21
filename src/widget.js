@@ -108,9 +108,26 @@
       z-index: 2147483647;
     }
 
-    *, *::before, *::after {
-      box-sizing: border-box;
+    .cf-root {
+      all: initial;
+      display: block;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #374151;
+      color-scheme: light;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    .cf-root *, .cf-root *::before, .cf-root *::after {
+      box-sizing: border-box;
+    }
+
+    .cf-root input, .cf-root textarea, .cf-root select, .cf-root button {
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+      color: inherit;
     }
 
     #${WIDGET_ID}-button {
@@ -545,6 +562,7 @@
       font-size: 14px;
       resize: vertical;
       margin-bottom: 16px;
+      background: white;
     }
 
     #${WIDGET_ID}-description:focus {
@@ -711,6 +729,7 @@
     // Create widget content inside shadow root
     const container = document.createElement('div');
     container.innerHTML = `
+      <div class="cf-root">
       <div id="${WIDGET_ID}-button-area" style="position: fixed; bottom: 20px; right: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">
         <!-- State 1: Single button (shown when no pending items) -->
         <button id="${WIDGET_ID}-button" class="disconnected" title="Click to annotate an element and send feedback to Claude. Add multiple items before sending.">
@@ -801,6 +820,7 @@
       
       <div id="${WIDGET_ID}-success"></div>
       <div id="${WIDGET_ID}-error"></div>
+      </div>
 
     `;
 

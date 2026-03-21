@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CSS isolation wrapper (`.cf-root`) inside Shadow DOM - uses `all: initial` to fully break CSS inheritance from host page, preventing dark-themed sites from affecting widget appearance
 - Shadow DOM isolation for widget - host page CSS no longer leaks into the widget UI
 - Tooltip selector truncation - long CSS selectors in hover tooltip are now truncated to 2 levels with `... >` prefix
 - Improved tooltip positioning - tooltip moves below element when it would go above the viewport, and is clamped horizontally
