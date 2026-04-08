@@ -405,6 +405,11 @@
       display: none;
     }
 
+    #${WIDGET_ID}-highlight.selected {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.1);
+    }
+
     #${WIDGET_ID}-tooltip {
       position: fixed;
       background: #1f2937;
@@ -939,25 +944,31 @@
     if (typeof html2canvas !== 'undefined') return Promise.resolve();
     if (html2canvasPromise) return html2canvasPromise;
 
-    html2canvasPromise = new Promise((resolve, reject) => {
-      // Derive HTTP URL from WS_URL (same host/port)
-      let baseUrl;
-      try {
-        const wsUrl = new URL(WS_URL);
-        baseUrl = `http://${wsUrl.host}`;
-      } catch {
-        baseUrl = `http://localhost:9877`;
-      }
+    // Derive HTTP URL from WS_URL (same host/port)
+    let baseUrl;
+    try {
+      const wsUrl = new URL(WS_URL);
+      baseUrl = `http://${wsUrl.host}`;
+    } catch {
+      baseUrl = `http://localhost:9877`;
+    }
 
-      const script = document.createElement('script');
-      script.src = `${baseUrl}/html2canvas.min.js`;
-      script.onload = resolve;
-      script.onerror = () => {
+    const url = `${baseUrl}/html2canvas.min.js`;
+
+    // Use fetch + new Function to avoid CSP script-src restrictions
+    // (e.g. when loaded via browser extension on pages with strict CSP)
+    html2canvasPromise = fetch(url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then(scriptText => {
+        new Function(scriptText)();
+      })
+      .catch(err => {
         html2canvasPromise = null;
-        reject(new Error('Failed to load html2canvas'));
-      };
-      document.head.appendChild(script);
-    });
+        throw new Error('Failed to load html2canvas: ' + (err.message || err));
+      });
 
     return html2canvasPromise;
   }
@@ -1431,9 +1442,15 @@
 
       // Shift+C to start annotation mode
       if (e.key === 'C' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        // Don't trigger when typing in input fields
-        const isInputFocused = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)
-          || document.activeElement.isContentEditable;
+        // Don't trigger when the feedback panel is open
+        const panel = getEl(`${WIDGET_ID}-panel`);
+        if (panel && panel.classList.contains('active')) return;
+
+        // Don't trigger when typing in input fields (including inside Shadow DOM)
+        const active = document.activeElement;
+        const deepActive = active?.shadowRoot?.activeElement || active;
+        const isInputFocused = ['INPUT', 'TEXTAREA'].includes(deepActive.tagName)
+          || deepActive.isContentEditable;
 
         if (!isInputFocused && !isAnnotationMode) {
           e.preventDefault();
@@ -1522,6 +1539,18 @@
       screenshotEl.style.display = 'none';
     }
 
+    // Show confirmed-selection highlight on the selected element
+    if (selectedElement) {
+      const highlight = getEl(`${WIDGET_ID}-highlight`);
+      const rect = selectedElement.getBoundingClientRect();
+      highlight.style.top = `${rect.top}px`;
+      highlight.style.left = `${rect.left}px`;
+      highlight.style.width = `${rect.width}px`;
+      highlight.style.height = `${rect.height}px`;
+      highlight.classList.add('selected');
+      highlight.style.display = 'block';
+    }
+
     panel.classList.add('active');
     getEl(`${WIDGET_ID}-description`).focus();
   }
@@ -1530,6 +1559,9 @@
     getEl(`${WIDGET_ID}-panel`).classList.remove('active');
     getEl(`${WIDGET_ID}-description`).value = '';
     selectedElement = null;
+    const highlight = getEl(`${WIDGET_ID}-highlight`);
+    highlight.style.display = 'none';
+    highlight.classList.remove('selected');
   }
 
   async function addItem() {

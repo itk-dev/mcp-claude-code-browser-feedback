@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Blue highlight indicator on selected element while feedback panel is open, so users can see which element they picked
+
+### Fixed
+
+- Shift+C keyboard shortcut no longer fires while typing in the feedback textarea (Shadow DOM focus detection)
+- html2canvas loading in browser extension context - uses fetch instead of script injection to avoid CSP restrictions
+
 - CSS isolation wrapper (`.cf-root`) inside Shadow DOM - uses `all: initial` to fully break CSS inheritance from host page, preventing dark-themed sites from affecting widget appearance
 - Shadow DOM isolation for widget - host page CSS no longer leaks into the widget UI
 - Tooltip selector truncation - long CSS selectors in hover tooltip are now truncated to 2 levels with `... >` prefix
