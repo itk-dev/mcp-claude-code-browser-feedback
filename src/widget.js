@@ -22,6 +22,7 @@
 
   // Configuration
   const WS_URL = '__WEBSOCKET_URL__'; // Injected by server
+  const WIDGET_VERSION = '__WIDGET_VERSION__'; // Injected by server
   const WIDGET_ID = 'claude-feedback-widget';
   
   // State
@@ -1855,7 +1856,7 @@
     connectWebSocket();
     startSelfHealing();
 
-    console.log('[Claude Feedback] Widget initialized');
+    console.log(`[Claude Feedback] Widget v${WIDGET_VERSION} initialized`);
   }
 
   init();

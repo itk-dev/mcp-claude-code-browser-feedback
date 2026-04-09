@@ -17,6 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = parseInt(process.env.FEEDBACK_PORT || "9877");
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 
 // Store for received feedback
 let pendingFeedback = [];
@@ -299,11 +300,10 @@ const httpServer = http.createServer((req, res) => {
         res.end("Error loading widget");
         return;
       }
-      // Inject the WebSocket URL into the widget
-      const injectedContent = content.replace(
-        "__WEBSOCKET_URL__",
-        `ws://localhost:${PORT}/ws`
-      );
+      // Inject runtime values into the widget
+      const injectedContent = content
+        .replace("__WEBSOCKET_URL__", `ws://localhost:${PORT}/ws`)
+        .replace("__WIDGET_VERSION__", PKG_VERSION);
       res.writeHead(200, { "Content-Type": "application/javascript" });
       res.end(injectedContent);
     });
@@ -319,6 +319,20 @@ const httpServer = http.createServer((req, res) => {
         return;
       }
       res.writeHead(200, { "Content-Type": "application/javascript" });
+      res.end(content);
+    });
+    return;
+  }
+
+  if (urlObj.pathname === "/demo/index.html" || urlObj.pathname === "/demo/") {
+    const demoPath = path.join(__dirname, "..", "demo", "index.html");
+    fs.readFile(demoPath, "utf8", (err, content) => {
+      if (err) {
+        res.writeHead(404);
+        res.end("Demo page not found");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html" });
       res.end(content);
     });
     return;
