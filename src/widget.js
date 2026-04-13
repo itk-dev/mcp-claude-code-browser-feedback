@@ -1428,14 +1428,17 @@
       if (e.key === 'Escape') {
         const panel = getEl(`${WIDGET_ID}-panel`);
         if (panel && panel.classList.contains('active')) {
+          e.stopPropagation();
           hidePanel();
           return;
         }
         if (isPendingQueueOpen) {
+          e.stopPropagation();
           closeQueuePanel();
           return;
         }
         if (isAnnotationMode) {
+          e.stopPropagation();
           stopAnnotationMode();
           return;
         }
@@ -1462,11 +1465,23 @@
     _listeners.onDocumentKeydown = onDocumentKeydown;
     document.addEventListener('keydown', onDocumentKeydown);
 
+    // Prevent keyboard events from leaking to host page when widget is active
+    function onShadowRootKeydown(e) {
+      const panel = getEl(`${WIDGET_ID}-panel`);
+      const panelIsOpen = panel && panel.classList.contains('active');
+      if (panelIsOpen || isAnnotationMode || isPendingQueueOpen) {
+        e.stopPropagation();
+      }
+    }
+    _listeners.onShadowRootKeydown = onShadowRootKeydown;
+    shadowRoot.addEventListener('keydown', onShadowRootKeydown);
+
     // Cmd/Ctrl+Enter to send feedback from description textarea
     const descriptionTextarea = getEl(`${WIDGET_ID}-description`);
     descriptionTextarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e[modifierKey]) {
         e.preventDefault();
+        e.stopPropagation();
         addItem();
       }
     });
@@ -1805,6 +1820,9 @@
     }
     if (_listeners.onDocumentKeydown) {
       document.removeEventListener('keydown', _listeners.onDocumentKeydown);
+    }
+    if (_listeners.onShadowRootKeydown && shadowRoot) {
+      shadowRoot.removeEventListener('keydown', _listeners.onShadowRootKeydown);
     }
     if (_listeners.onWindowResize) {
       window.removeEventListener('resize', _listeners.onWindowResize);
