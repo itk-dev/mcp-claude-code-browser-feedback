@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keyboard events (arrow keys, typing, etc.) no longer leak to the host page when the feedback panel, annotation mode, or queue panel is active
 - Shift+C keyboard shortcut no longer fires while typing in the feedback textarea (Shadow DOM focus detection)
 - html2canvas loading in browser extension context - uses fetch instead of script injection to avoid CSP restrictions
 
