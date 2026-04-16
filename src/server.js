@@ -1724,6 +1724,53 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Start servers
 // ============================================
 
+// Try to bind the HTTP server with health-check-and-retry for stale processes.
+// When EADDRINUSE occurs, we check if the existing server is healthy (GET /status).
+// If healthy, we accept proxy mode. If not (zombie process), we wait and retry.
+async function tryListenWithRetry(maxRetries = 3, retryDelay = 1000) {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (err) => {
+          httpServer.removeListener('error', onError);
+          reject(err);
+        };
+        httpServer.on('error', onError);
+        httpServer.listen(PORT, () => {
+          httpServer.removeListener('error', onError);
+          resolve();
+        });
+      });
+      // Successfully bound the port
+      isHttpServerOwner = true;
+      console.error(`[browser-feedback-mcp] HTTP/WebSocket server running on http://localhost:${PORT}`);
+      console.error(`[browser-feedback-mcp] Widget available at http://localhost:${PORT}/widget.js`);
+      return;
+    } catch (err) {
+      if (err.code !== 'EADDRINUSE') {
+        console.error(`[browser-feedback-mcp] HTTP server error:`, err);
+        return; // Non-retryable error, fall back to proxy mode
+      }
+
+      // Port in use — check if the existing server is actually healthy
+      const status = await fetchServerStatus();
+      if (status) {
+        console.error(`[browser-feedback-mcp] Port ${PORT} is in use by a healthy server.`);
+        console.error(`[browser-feedback-mcp] MCP tools will proxy requests to the running server.`);
+        return; // Healthy server exists, use proxy mode
+      }
+
+      // Server on the port is unresponsive (zombie/stale process)
+      if (attempt <= maxRetries) {
+        console.error(`[browser-feedback-mcp] Port ${PORT} is held by an unresponsive process. Retrying in ${retryDelay}ms... (attempt ${attempt}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, retryDelay));
+      } else {
+        console.error(`[browser-feedback-mcp] Port ${PORT} still unavailable after ${maxRetries} retries. Running in proxy mode.`);
+      }
+    }
+  }
+}
+
 async function main() {
   // Start MCP server first (this is the critical part for Claude Code)
   const transport = new StdioServerTransport();
@@ -1731,21 +1778,7 @@ async function main() {
   console.error("[browser-feedback-mcp] MCP server connected via stdio");
 
   // Start HTTP/WebSocket server (may fail if port is in use, but MCP will still work)
-  httpServer.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[browser-feedback-mcp] Port ${PORT} is already in use by another instance.`);
-      console.error(`[browser-feedback-mcp] MCP tools will proxy requests to the running server.`);
-      // isHttpServerOwner remains false, tools will use HTTP proxy
-    } else {
-      console.error(`[browser-feedback-mcp] HTTP server error:`, err);
-    }
-  });
-
-  httpServer.listen(PORT, () => {
-    isHttpServerOwner = true;
-    console.error(`[browser-feedback-mcp] HTTP/WebSocket server running on http://localhost:${PORT}`);
-    console.error(`[browser-feedback-mcp] Widget available at http://localhost:${PORT}/widget.js`);
-  });
+  await tryListenWithRetry();
 }
 
 main().catch((error) => {
