@@ -36,15 +36,26 @@ This is a plain JavaScript (ES modules) project with no TypeScript or build step
 
 - `extension/` - Chrome/Firefox MV3 browser extension:
   - `manifest.json` - Single manifest for both browsers
-  - `background.js` - Service worker tracking per-tab state and badge
-  - `content.js` - Injects/removes widget via `<script src>` tag
-  - `popup/` - Toggle UI with connection status and server URL config
+  - `background.js` - Service worker tracking per-tab state, badge, and session auto-matching
+  - `content.js` - Injects/removes widget via `<script src>` tag (with session ID in URL)
+  - `popup/` - Toggle UI with connection status, server URL config, and session picker
+
+**Session isolation:**
+Each Claude Code process generates a unique `SESSION_ID` (UUID). All feedback storage, WebSocket broadcasts, and MCP tool responses are partitioned by session ID. This prevents feedback from one project appearing in another.
+
+- First process binds the port and becomes the HTTP server owner
+- Subsequent processes register via `POST /register-session` and run in proxy mode
+- Widget URL includes `?session=<id>` which tags the WebSocket connection
+- Extension auto-matches tabs to sessions by comparing tab origin against detected project URLs
+- When multiple sessions exist and auto-match fails, extension popup shows a session picker
+- `GET /sessions` returns all registered sessions with project metadata
+- Backward compatible: connections without a session param use the `'default'` session
 
 **Data flow (online):**
 1. Widget injected into user's web app (via `install_widget` tool, manual script tag, or browser extension)
 2. User selects element and submits feedback
-3. Widget sends feedback via WebSocket to server
-4. Server stores feedback and resolves any pending `wait_for_browser_feedback` promises
+3. Widget sends feedback via WebSocket to server (tagged with session ID)
+4. Server stores feedback in session-scoped queue and resolves session-specific `wait_for_browser_feedback` promises
 5. Claude receives structured feedback (element info, screenshot, console logs, description)
 
 **Data flow (offline):**

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Session isolation for multi-project support — each Claude Code session gets a unique session ID, preventing feedback from one project appearing in another project's widget
+- New `/sessions` HTTP endpoint listing all active sessions with project metadata
+- Session registry with `/register-session` and `/unregister-session` endpoints for proxy instances
+- Browser extension auto-matches tabs to sessions based on detected project URL; shows a session picker when multiple sessions are ambiguous
+- Session ID included in widget URL, WebSocket connections, and all feedback messages for full isolation
+
 ### Fixed
 
 - Stale MCP processes no longer block port binding — on EADDRINUSE, the server now health-checks the existing process and retries up to 3 times before falling back to proxy mode

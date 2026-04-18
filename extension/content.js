@@ -7,11 +7,14 @@
 
 let injectedScript = null;
 
-function activate(serverUrl) {
+function activate(serverUrl, sessionId) {
   if (injectedScript) return; // already active
 
   injectedScript = document.createElement('script');
-  injectedScript.src = `${serverUrl}/widget.js`;
+  const url = sessionId
+    ? `${serverUrl}/widget.js?session=${sessionId}`
+    : `${serverUrl}/widget.js`;
+  injectedScript.src = url;
   injectedScript.id = 'claude-feedback-ext-script';
   document.documentElement.appendChild(injectedScript);
 }
@@ -40,7 +43,7 @@ function deactivate() {
 // Listen for messages from the background script
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.action === 'activate') {
-    activate(message.serverUrl);
+    activate(message.serverUrl, message.sessionId);
     sendResponse({ ok: true });
   } else if (message.action === 'deactivate') {
     deactivate();
@@ -54,6 +57,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.sendMessage({ action: 'getTabState' }, (response) => {
   if (chrome.runtime.lastError) return; // extension context invalidated
   if (response && response.active) {
-    activate(response.serverUrl);
+    activate(response.serverUrl, response.sessionId);
   }
 });
