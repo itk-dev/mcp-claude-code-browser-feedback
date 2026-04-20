@@ -22,7 +22,6 @@
 
   // Configuration
   const WS_URL = '__WEBSOCKET_URL__'; // Injected by server
-  const SESSION_ID = '__SESSION_ID__'; // Injected by server (for multi-session isolation)
   const WIDGET_VERSION = '__WIDGET_VERSION__'; // Injected by server
   const WIDGET_ID = 'claude-feedback-widget';
   
@@ -1188,7 +1187,6 @@
     if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'delete_feedback',
-        sessionId: SESSION_ID,
         id: id,
       }));
     } else {
@@ -1270,7 +1268,7 @@
     // "Send" button — send to claude
     sendBtnGroup.addEventListener('click', () => {
       if (ws && ws.readyState === WebSocket.OPEN && pendingItems.length > 0) {
-        ws.send(JSON.stringify({ type: 'send_to_claude', sessionId: SESSION_ID }));
+        ws.send(JSON.stringify({ type: 'send_to_claude' }));
       }
     });
 
@@ -1622,7 +1620,6 @@
       try {
         ws.send(JSON.stringify({
           type: 'feedback',
-          sessionId: SESSION_ID,
           payload: feedback,
         }));
         hidePanel();

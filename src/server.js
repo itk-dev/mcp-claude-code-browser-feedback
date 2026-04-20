@@ -59,6 +59,24 @@ function getSessionClients(sid) {
   return connectedClientsBySession.get(sid);
 }
 
+// UUID format validation for session IDs
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidSessionId(id) {
+  return typeof id === 'string' && UUID_RE.test(id);
+}
+
+// Helper to parse JSON body from an HTTP request
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); }
+      catch (err) { reject(err); }
+    });
+  });
+}
+
 // Helper to generate pending feedback summary (without full payloads)
 function getPendingSummary(sessionId) {
   const pending = sessionId ? getSessionPending(sessionId) : [];
@@ -376,7 +394,6 @@ const httpServer = http.createServer((req, res) => {
         : `ws://localhost:${PORT}/ws`;
       const injectedContent = content
         .replace("__WEBSOCKET_URL__", wsUrl)
-        .replace("__SESSION_ID__", sessionParam)
         .replace("__WIDGET_VERSION__", PKG_VERSION);
       res.writeHead(200, { "Content-Type": "application/javascript" });
       res.end(injectedContent);
@@ -473,25 +490,20 @@ const httpServer = http.createServer((req, res) => {
   // POST /broadcast - broadcast message to connected clients (used by secondary MCP instances)
   if (urlObj.pathname === "/broadcast" && req.method === "POST") {
     const sessionId = urlObj.searchParams.get("session") || "default";
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
-      try {
-        const message = JSON.parse(body);
-        const data = JSON.stringify(message);
-        let sentCount = 0;
-        for (const client of getSessionClients(sessionId)) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(data);
-            sentCount++;
-          }
+    parseJsonBody(req).then((message) => {
+      const data = JSON.stringify(message);
+      let sentCount = 0;
+      for (const client of getSessionClients(sessionId)) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(data);
+          sentCount++;
         }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true, clientCount: sentCount }));
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, clientCount: sentCount }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
     });
     return;
   }
@@ -506,49 +518,49 @@ const httpServer = http.createServer((req, res) => {
 
   // POST /register-session - register a proxy session
   if (urlObj.pathname === "/register-session" && req.method === "POST") {
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
-      try {
-        const data = JSON.parse(body);
-        sessionRegistry.set(data.sessionId, {
-          sessionId: data.sessionId,
-          projectDir: data.projectDir,
-          projectUrl: data.projectUrl || null,
-          detectedFrom: data.detectedFrom || null,
-          registeredAt: new Date().toISOString(),
-        });
-        console.error(`[browser-feedback-mcp] Session registered: ${data.sessionId} (${data.projectDir})`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true }));
-      } catch (err) {
+    parseJsonBody(req).then((data) => {
+      if (!isValidSessionId(data.sessionId)) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON" }));
+        res.end(JSON.stringify({ error: "Invalid session ID format" }));
+        return;
       }
+      sessionRegistry.set(data.sessionId, {
+        sessionId: data.sessionId,
+        projectDir: data.projectDir,
+        projectUrl: data.projectUrl || null,
+        detectedFrom: data.detectedFrom || null,
+        registeredAt: new Date().toISOString(),
+      });
+      console.error(`[browser-feedback-mcp] Session registered: ${data.sessionId} (${data.projectDir})`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
     });
     return;
   }
 
   // POST /unregister-session - unregister a session on shutdown
   if (urlObj.pathname === "/unregister-session" && req.method === "POST") {
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
-      try {
-        const data = JSON.parse(body);
-        sessionRegistry.delete(data.sessionId);
-        // Clean up session data
-        pendingFeedbackBySession.delete(data.sessionId);
-        readyFeedbackBySession.delete(data.sessionId);
-        feedbackResolversBySession.delete(data.sessionId);
-        connectedClientsBySession.delete(data.sessionId);
-        console.error(`[browser-feedback-mcp] Session unregistered: ${data.sessionId}`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true }));
-      } catch (err) {
+    parseJsonBody(req).then((data) => {
+      if (!isValidSessionId(data.sessionId)) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON" }));
+        res.end(JSON.stringify({ error: "Invalid session ID format" }));
+        return;
       }
+      sessionRegistry.delete(data.sessionId);
+      // Clean up session data
+      pendingFeedbackBySession.delete(data.sessionId);
+      readyFeedbackBySession.delete(data.sessionId);
+      feedbackResolversBySession.delete(data.sessionId);
+      connectedClientsBySession.delete(data.sessionId);
+      console.error(`[browser-feedback-mcp] Session unregistered: ${data.sessionId}`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
     });
     return;
   }
