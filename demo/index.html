@@ -204,16 +204,14 @@
     <div class="instructions">
       <h3>How to Test</h3>
       <ol>
+        <li>Install the browser extension from the <code>extension/</code> directory</li>
+        <li>Enable the widget on this page using the extension toggle</li>
         <li>Look for the <strong>Add annotation</strong> button in the bottom-right corner</li>
         <li>Click it to enter annotation mode</li>
         <li>Hover over elements - they'll highlight in orange</li>
         <li>Click on an element you want to report</li>
         <li>Add a description and click "Send to Claude"</li>
       </ol>
-      <p style="margin-top: 12px; font-size: 13px;">
-        <strong>Note:</strong> The button appears gray if the MCP server isn't running.
-        Start it with: <code>node src/server.js</code>
-      </p>
     </div>
     
     <!-- Intentional issues for testing -->
@@ -293,12 +291,5 @@
       console.warn('Session will expire in 5 minutes');
     }, 2000);
   </script>
-  
-  <!-- Load the feedback widget -->
-  <!-- For better screenshots, optionally include html2canvas -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  
-  <!-- The widget script - served by the MCP server (session ID injected at serve-time) -->
-  <script src="/widget.js"></script>
 </body>
 </html>
