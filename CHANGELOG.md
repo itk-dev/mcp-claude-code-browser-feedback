@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-20
+
 ### Added
 
 - Session isolation for multi-project support — each Claude Code session gets a unique session ID, preventing feedback from one project appearing in another project's widget
