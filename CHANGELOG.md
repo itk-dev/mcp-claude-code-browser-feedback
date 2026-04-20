@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Browser extension auto-matches tabs to sessions based on detected project URL; shows a session picker when multiple sessions are ambiguous
 - Session ID included in widget URL, WebSocket connections, and all feedback messages for full isolation
 - Test infrastructure with Vitest — unit tests for utils and integration tests for HTTP endpoints
-- GitHub Actions CI workflow running tests on Node 20 and 22
+- GitHub Actions CI workflow running tests on Node 22 LTS
+- WebSocket session routing tests verifying correct session bucket assignment and duplicate-tab warnings
+- Duplicate-tab warning — widget notifies when connecting to a session that already has clients
+- Extension popup shows active session name with a "Change" button to switch sessions
 
 ### Changed
 
@@ -26,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- WebSocket connections without a `?session=` param no longer silently land in a `'default'` bucket — they are placed in `'unmatched'` with a warning, preventing phantom "no clients connected" errors
+- `get_connection_status` in proxy mode now returns session-scoped client count instead of misleading global total
+- Extension popup now shows session-scoped client count instead of global count across all sessions
 - Stale MCP processes no longer block port binding — on EADDRINUSE, the server now health-checks the existing process and retries up to 3 times before falling back to proxy mode
 
 ## [0.5.0] - 2026-04-13

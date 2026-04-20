@@ -51,7 +51,7 @@ Each Claude Code process generates a unique `SESSION_ID` (UUID). All feedback st
 - Extension auto-matches tabs to sessions by comparing tab origin against detected project URLs
 - When multiple sessions exist and auto-match fails, extension popup shows a session picker
 - `GET /sessions` returns all registered sessions with project metadata
-- Backward compatible: connections without a session param use the `'default'` session
+- Connections without a session param are placed in the `'unmatched'` bucket with a warning — they will not be visible to any MCP session
 
 **Data flow (online):**
 1. Widget injected into user's web app (via `install_widget` tool, manual script tag, or browser extension)
