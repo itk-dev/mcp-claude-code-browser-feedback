@@ -5,8 +5,12 @@ const serverUrlInput = document.getElementById('server-url');
 const saveUrlBtn = document.getElementById('save-url');
 const sessionPickerEl = document.getElementById('session-picker');
 const sessionListEl = document.getElementById('session-list');
+const activeSessionEl = document.getElementById('active-session');
+const activeSessionName = document.getElementById('active-session-name');
+const changeSessionBtn = document.getElementById('change-session');
 
 let currentTabId = null;
+let currentSessionId = null;
 
 // Get the active tab ID
 async function getCurrentTab() {
@@ -15,13 +19,17 @@ async function getCurrentTab() {
 }
 
 // Check if the MCP server is reachable
-async function checkConnection(serverUrl) {
+async function checkConnection(serverUrl, sessionId) {
   try {
-    const resp = await fetch(`${serverUrl}/status`, { signal: AbortSignal.timeout(2000) });
+    const url = sessionId
+      ? `${serverUrl}/status?session=${sessionId}`
+      : `${serverUrl}/status`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (resp.ok) {
       const data = await resp.json();
+      const count = data.connectedClients || 0;
       statusDot.className = 'status-dot connected';
-      statusText.textContent = `Connected (${data.connectedClients || 0} client${(data.connectedClients || 0) !== 1 ? 's' : ''}, port ${data.port || serverUrl.split(':').pop()})`;
+      statusText.textContent = `Connected (${count} client${count !== 1 ? 's' : ''}, port ${data.port || serverUrl.split(':').pop()})`;
       return true;
     }
   } catch {
@@ -85,8 +93,25 @@ async function init() {
 
     toggleEl.checked = response.active;
     serverUrlInput.value = response.serverUrl;
+    currentSessionId = response.sessionId || null;
     sessionPickerEl.style.display = 'none';
-    await checkConnection(response.serverUrl);
+    await checkConnection(response.serverUrl, currentSessionId);
+
+    // Show active session info
+    if (currentSessionId) {
+      chrome.runtime.sendMessage({ action: 'getSessions' }, (sessionsResp) => {
+        if (sessionsResp && sessionsResp.sessions) {
+          const matched = sessionsResp.sessions.find(s => s.sessionId === currentSessionId);
+          activeSessionName.textContent = matched
+            ? (matched.projectDir.split('/').pop() || matched.projectDir)
+            : currentSessionId.slice(0, 8) + '...';
+          activeSessionName.title = matched ? matched.projectDir : currentSessionId;
+          activeSessionEl.style.display = 'flex';
+        }
+      });
+    } else {
+      activeSessionEl.style.display = 'none';
+    }
   });
 }
 
@@ -112,13 +137,22 @@ toggleEl.addEventListener('change', () => {
   });
 });
 
+// Change session button
+changeSessionBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'getSessions' }, (sessionsResp) => {
+    if (sessionsResp && sessionsResp.sessions) {
+      showSessionPicker(sessionsResp.sessions);
+    }
+  });
+});
+
 // Save server URL
 saveUrlBtn.addEventListener('click', () => {
   const url = serverUrlInput.value.trim().replace(/\/+$/, '');
   if (!url) return;
 
   chrome.runtime.sendMessage({ action: 'setServerUrl', serverUrl: url }, () => {
-    checkConnection(url);
+    checkConnection(url, currentSessionId);
   });
 });
 

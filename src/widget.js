@@ -1196,7 +1196,15 @@
   }
 
   function handleServerMessage(message) {
-    if (message.type === 'pending_status') {
+    if (message.type === 'connected') {
+      if (message.sessionWarning) {
+        console.warn('[Claude Feedback]', message.sessionWarning);
+      }
+      if (message.duplicateWarning) {
+        console.warn('[Claude Feedback]', message.duplicateWarning);
+        showNotification(message.duplicateWarning);
+      }
+    } else if (message.type === 'pending_status') {
       // Update pending items from server
       pendingItems = message.items || [];
       updatePendingUI();
@@ -1745,8 +1753,8 @@
   }
 
   function showNotification(message) {
-    // Could enhance this with a toast notification
     console.log('[Claude Feedback]', message);
+    showSuccess(message);
   }
 
   // ============================================

@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'node:crypto';
+import WebSocket from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = path.join(__dirname, '..', 'src', 'server.js');
@@ -173,7 +174,7 @@ describe('session-scoped data isolation', () => {
 
 describe('broadcast endpoint', () => {
   it('POST /broadcast with valid JSON returns 200', async () => {
-    const resp = await fetch(`${BASE_URL}/broadcast?session=default`, {
+    const resp = await fetch(`${BASE_URL}/broadcast?session=unmatched`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'test', message: 'hello' }),
@@ -185,11 +186,94 @@ describe('broadcast endpoint', () => {
   });
 
   it('POST /broadcast with invalid JSON returns 400', async () => {
-    const resp = await fetch(`${BASE_URL}/broadcast?session=default`, {
+    const resp = await fetch(`${BASE_URL}/broadcast?session=unmatched`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'not json',
     });
     expect(resp.status).toBe(400);
+  });
+});
+
+// ============================================
+// WebSocket Session Routing
+// ============================================
+
+function connectWs(sessionId) {
+  return new Promise((resolve, reject) => {
+    const url = sessionId
+      ? `ws://localhost:${TEST_PORT}/ws?session=${sessionId}`
+      : `ws://localhost:${TEST_PORT}/ws`;
+    const ws = new WebSocket(url);
+    ws.on('open', () => {
+      // Wait for the connected message
+      ws.once('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        resolve({ ws, msg });
+      });
+    });
+    ws.on('error', reject);
+  });
+}
+
+describe('WebSocket session routing', () => {
+  it('client with ?session=<uuid> registers in correct session bucket', async () => {
+    const sessionId = crypto.randomUUID();
+    const { ws, msg } = await connectWs(sessionId);
+
+    try {
+      expect(msg.type).toBe('connected');
+      expect(msg.sessionId).toBe(sessionId);
+      expect(msg.sessionWarning).toBeUndefined();
+
+      const resp = await fetch(`${BASE_URL}/status?session=${sessionId}`);
+      const data = await resp.json();
+      expect(data.connectedClients).toBe(1);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('client without ?session= lands in unmatched bucket, not in any UUID session', async () => {
+    const { ws, msg } = await connectWs(null);
+
+    try {
+      expect(msg.type).toBe('connected');
+      expect(msg.sessionId).toBe('unmatched');
+      expect(msg.sessionWarning).toBeDefined();
+
+      // Should NOT show up in any UUID session
+      const unknownId = crypto.randomUUID();
+      const resp = await fetch(`${BASE_URL}/status?session=${unknownId}`);
+      const data = await resp.json();
+      expect(data.connectedClients).toBe(0);
+    } finally {
+      ws.close();
+    }
+  });
+
+  it('second client on same session triggers duplicate warning', async () => {
+    const sessionId = crypto.randomUUID();
+    const { ws: ws1, msg: msg1 } = await connectWs(sessionId);
+
+    try {
+      expect(msg1.duplicateWarning).toBeUndefined();
+      expect(msg1.sessionClientCount).toBe(1);
+
+      const { ws: ws2, msg: msg2 } = await connectWs(sessionId);
+
+      try {
+        expect(msg2.duplicateWarning).toBeDefined();
+        expect(msg2.sessionClientCount).toBe(2);
+
+        const resp = await fetch(`${BASE_URL}/status?session=${sessionId}`);
+        const data = await resp.json();
+        expect(data.connectedClients).toBe(2);
+      } finally {
+        ws2.close();
+      }
+    } finally {
+      ws1.close();
+    }
   });
 });

@@ -291,7 +291,7 @@ const httpServer = http.createServer((req, res) => {
   // GET /feedback - retrieve ready feedback (used by secondary MCP instances)
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
-    const sessionId = urlObj.searchParams.get("session") || "default";
+    const sessionId = urlObj.searchParams.get("session") || "unmatched";
     const sessionReady = getSessionReady(sessionId);
     const feedback = [...sessionReady];
     if (shouldClear) {
@@ -304,7 +304,7 @@ const httpServer = http.createServer((req, res) => {
 
   // GET /pending-summary - get summary of pending feedback without full payloads
   if (urlObj.pathname === "/pending-summary" && req.method === "GET") {
-    const sessionId = urlObj.searchParams.get("session") || "default";
+    const sessionId = urlObj.searchParams.get("session") || "unmatched";
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(getPendingSummary(getSessionPending(sessionId))));
     return;
@@ -314,7 +314,7 @@ const httpServer = http.createServer((req, res) => {
   const deleteMatch = urlObj.pathname.match(/^\/feedback\/([^/]+)$/);
   if (deleteMatch && req.method === "DELETE") {
     const idToDelete = deleteMatch[1];
-    const sessionId = urlObj.searchParams.get("session") || "default";
+    const sessionId = urlObj.searchParams.get("session") || "unmatched";
     const pending = getSessionPending(sessionId);
     const initialLength = pending.length;
     setSessionPending(sessionId, pending.filter(f => f.id !== idToDelete));
@@ -334,7 +334,7 @@ const httpServer = http.createServer((req, res) => {
 
   // POST /broadcast - broadcast message to connected clients (used by secondary MCP instances)
   if (urlObj.pathname === "/broadcast" && req.method === "POST") {
-    const sessionId = urlObj.searchParams.get("session") || "default";
+    const sessionId = urlObj.searchParams.get("session") || "unmatched";
     parseJsonBody(req).then((message) => {
       const data = JSON.stringify(message);
       let sentCount = 0;
@@ -428,15 +428,34 @@ wss.on("error", (err) => {
 wss.on("connection", (ws, req) => {
   // Extract session ID from WebSocket URL query params
   const reqUrl = new URL(req.url, `http://localhost:${PORT}`);
-  const sessionId = reqUrl.searchParams.get('session') || 'default';
+  const rawSession = reqUrl.searchParams.get('session');
+  const sessionId = rawSession || 'unmatched';
   ws._sessionId = sessionId;
 
+  if (!rawSession) {
+    console.error(`[browser-feedback-mcp] WARNING: WebSocket connection without session param. Client placed in 'unmatched' bucket.`);
+  }
+
   connectedClients.add(ws);
-  getSessionClients(sessionId).add(ws);
+  const sessionClients = getSessionClients(sessionId);
+  const existingCount = sessionClients.size;
+  sessionClients.add(ws);
   console.error(`[browser-feedback-mcp] Client connected (session: ${sessionId}). Total: ${connectedClients.size}`);
 
-  // Send connection confirmation
-  ws.send(JSON.stringify({ type: "connected", message: "Connected to Claude Code feedback server", sessionId }));
+  // Send connection confirmation with session info and warnings
+  const connectionMsg = {
+    type: "connected",
+    message: "Connected to Claude Code feedback server",
+    sessionId,
+    sessionClientCount: existingCount + 1,
+  };
+  if (!rawSession) {
+    connectionMsg.sessionWarning = "No session ID provided. This connection is not linked to any Claude Code session.";
+  }
+  if (existingCount > 0) {
+    connectionMsg.duplicateWarning = `This session already has ${existingCount} other connected client(s). The same site may be open in another tab.`;
+  }
+  ws.send(JSON.stringify(connectionMsg));
 
   // Send current pending status for this session to newly connected client
   const status = getPendingSummary(getSessionPending(sessionId));
@@ -1412,7 +1431,7 @@ The widget only loads in development (localhost) by default.
     case "get_connection_status": {
       // If we don't own the HTTP server, fetch status from the running server
       if (!isHttpServerOwner) {
-        const status = await fetchServerStatus();
+        const status = await fetchServerStatus(SESSION_ID);
         if (status) {
           return {
             content: [
