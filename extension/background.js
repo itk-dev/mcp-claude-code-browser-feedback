@@ -50,7 +50,8 @@ function updateBadge(tabId, active) {
     chrome.action.setBadgeText({ text: 'ON', tabId });
     chrome.action.setBadgeBackgroundColor({ color: '#22c55e', tabId });
   } else {
-    chrome.action.setBadgeText({ text: '', tabId });
+    chrome.action.setBadgeText({ text: 'OFF', tabId });
+    chrome.action.setBadgeBackgroundColor({ color: '#9ca3af', tabId });
   }
 }
 
@@ -203,6 +204,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     activeTabs.add(tabId);
 
     getServerUrl().then(async (serverUrl) => {
+      await sendToTab(tabId, { action: 'deactivate' });
       await sendToTab(tabId, { action: 'activate', serverUrl, sessionId });
       updateBadge(tabId, true);
       persistActiveTabs();

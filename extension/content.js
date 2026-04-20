@@ -6,10 +6,16 @@
  */
 
 let injectedScript = null;
+let currentSessionId = null;
 
 function activate(serverUrl, sessionId) {
-  if (injectedScript) return; // already active
+  if (injectedScript) {
+    // Already active — only re-inject if session changed
+    if (sessionId === currentSessionId) return;
+    deactivate();
+  }
 
+  currentSessionId = sessionId;
   injectedScript = document.createElement('script');
   const url = sessionId
     ? `${serverUrl}/widget.js?session=${sessionId}`
@@ -35,6 +41,7 @@ function deactivate() {
     injectedScript.remove();
     injectedScript = null;
   }
+  currentSessionId = null;
   // Also remove any script tag that might have been left from a previous session
   const existing = document.getElementById('claude-feedback-ext-script');
   if (existing) existing.remove();
@@ -56,7 +63,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // On load, check if this tab should be active (handles navigation/reload)
 chrome.runtime.sendMessage({ action: 'getTabState' }, (response) => {
   if (chrome.runtime.lastError) return; // extension context invalidated
-  if (response && response.active) {
+  if (response && response.active && response.sessionId) {
     activate(response.serverUrl, response.sessionId);
   }
 });
