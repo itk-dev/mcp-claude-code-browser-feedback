@@ -11,6 +11,8 @@ Browser Feedback MCP is a Model Context Protocol server that enables visual brow
 ```bash
 npm install    # Install dependencies
 npm start      # Run the MCP server (node src/server.js)
+npm test       # Run tests (vitest)
+npm run test:watch  # Run tests in watch mode
 ```
 
 ## Architecture

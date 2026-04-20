@@ -13,6 +13,7 @@ import path from "path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "url";
 import { execFile } from "child_process";
+import { isValidSessionId, getPendingSummary, detectProjectUrl, formatFeedbackAsContent } from "./utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,12 +60,6 @@ function getSessionClients(sid) {
   return connectedClientsBySession.get(sid);
 }
 
-// UUID format validation for session IDs
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isValidSessionId(id) {
-  return typeof id === 'string' && UUID_RE.test(id);
-}
-
 // Helper to parse JSON body from an HTTP request
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -77,23 +72,9 @@ function parseJsonBody(req) {
   });
 }
 
-// Helper to generate pending feedback summary (without full payloads)
-function getPendingSummary(sessionId) {
-  const pending = sessionId ? getSessionPending(sessionId) : [];
-  return {
-    count: pending.length,
-    items: pending.map(f => ({
-      id: f.id,
-      timestamp: f.timestamp || f.receivedAt,
-      description: f.description ? f.description.slice(0, 100) : '',
-      selector: f.element?.selector || '',
-    })),
-  };
-}
-
 // Broadcast pending status to session-specific connected clients
 function broadcastPendingStatus(sessionId) {
-  const status = getPendingSummary(sessionId);
+  const status = getPendingSummary(getSessionPending(sessionId));
   const message = JSON.stringify({ type: 'pending_status', ...status });
   for (const client of getSessionClients(sessionId)) {
     if (client.readyState === WebSocket.OPEN) {
@@ -224,142 +205,6 @@ async function unregisterSessionViaHttp() {
   }
 }
 
-// Helper to detect project URL from configuration files
-function detectProjectUrl(projectDir) {
-  // Detection strategies in order of priority
-  const detectionStrategies = [
-    // .env file patterns
-    {
-      file: '.env',
-      patterns: [
-        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        // Add protocol if missing
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    // .env.local file patterns
-    {
-      file: '.env.local',
-      patterns: [
-        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    // docker-compose.yml patterns
-    {
-      file: 'docker-compose.yml',
-      patterns: [
-        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    // docker-compose.override.yml patterns
-    {
-      file: 'docker-compose.override.yml',
-      patterns: [
-        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    // package.json homepage or proxy
-    {
-      file: 'package.json',
-      patterns: [
-        /"homepage"\s*:\s*"([^"]+)"/,
-        /"proxy"\s*:\s*"([^"]+)"/,
-      ],
-      transform: (match) => match[1],
-    },
-  ];
-
-  for (const strategy of detectionStrategies) {
-    const filePath = path.join(projectDir, strategy.file);
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, 'utf8');
-        for (const pattern of strategy.patterns) {
-          const match = content.match(pattern);
-          if (match) {
-            return {
-              url: strategy.transform(match),
-              detectedFrom: strategy.file,
-            };
-          }
-        }
-      } catch (err) {
-        // Continue to next strategy
-      }
-    }
-  }
-
-  return { url: null, detectedFrom: null };
-}
-
-// Helper to format feedback items as MCP content blocks with ImageContent for screenshots
-function formatFeedbackAsContent(items) {
-  if (!Array.isArray(items)) items = [items];
-
-  const content = [];
-  for (const item of items) {
-    // Separate screenshot from the rest of the data
-    const { screenshot, ...rest } = item;
-
-    content.push({
-      type: "text",
-      text: JSON.stringify(rest, null, 2),
-    });
-
-    if (screenshot && typeof screenshot === 'string') {
-      // Parse data URL: "data:image/jpeg;base64,..."
-      const match = screenshot.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        content.push({
-          type: "image",
-          data: match[2],
-          mimeType: match[1],
-        });
-      }
-    }
-  }
-
-  if (items.length > 1) {
-    content.unshift({
-      type: "text",
-      text: `Received ${items.length} feedback item(s):`,
-    });
-  }
-
-  return content;
-}
-
 // ============================================
 // HTTP Server - serves widget.js
 // ============================================
@@ -461,7 +306,7 @@ const httpServer = http.createServer((req, res) => {
   if (urlObj.pathname === "/pending-summary" && req.method === "GET") {
     const sessionId = urlObj.searchParams.get("session") || "default";
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(getPendingSummary(sessionId)));
+    res.end(JSON.stringify(getPendingSummary(getSessionPending(sessionId))));
     return;
   }
 
@@ -594,7 +439,7 @@ wss.on("connection", (ws, req) => {
   ws.send(JSON.stringify({ type: "connected", message: "Connected to Claude Code feedback server", sessionId }));
 
   // Send current pending status for this session to newly connected client
-  const status = getPendingSummary(sessionId);
+  const status = getPendingSummary(getSessionPending(sessionId));
   ws.send(JSON.stringify({ type: 'pending_status', ...status }));
 
   ws.on("message", (data) => {
@@ -1349,7 +1194,7 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const summary = getPendingSummary(SESSION_ID);
+      const summary = getPendingSummary(getSessionPending(SESSION_ID));
       if (summary.count === 0) {
         return {
           content: [
