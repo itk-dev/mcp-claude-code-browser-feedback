@@ -10,6 +10,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import fs from "fs";
 import path from "path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "url";
 import { execFile } from "child_process";
 
@@ -19,18 +20,69 @@ const __dirname = path.dirname(__filename);
 const PORT = parseInt(process.env.FEEDBACK_PORT || "9877");
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 
-// Store for received feedback
-let pendingFeedback = [];
-let readyFeedback = []; // Items confirmed by user for sending to Claude
-let feedbackResolvers = []; // Promises waiting for feedback
-let connectedClients = new Set();
+// Session identity for this MCP server process
+const SESSION_ID = crypto.randomUUID();
+const PROJECT_DIR = process.cwd();
+
+// Session registry (owner server only): sessionId -> metadata
+const sessionRegistry = new Map();
+
+// Session-partitioned feedback storage
+const pendingFeedbackBySession = new Map();   // sessionId -> feedback[]
+const readyFeedbackBySession = new Map();     // sessionId -> feedback[]
+const feedbackResolversBySession = new Map(); // sessionId -> resolver[]
+const connectedClientsBySession = new Map();  // sessionId -> Set<WebSocket>
+let connectedClients = new Set();             // All clients (for total count in /status)
 let isHttpServerOwner = false; // Track if this instance owns the HTTP server
 
+// Session-partitioned data accessors
+function getSessionPending(sid) {
+  if (!pendingFeedbackBySession.has(sid)) pendingFeedbackBySession.set(sid, []);
+  return pendingFeedbackBySession.get(sid);
+}
+function setSessionPending(sid, arr) {
+  pendingFeedbackBySession.set(sid, arr);
+}
+function getSessionReady(sid) {
+  if (!readyFeedbackBySession.has(sid)) readyFeedbackBySession.set(sid, []);
+  return readyFeedbackBySession.get(sid);
+}
+function setSessionReady(sid, arr) {
+  readyFeedbackBySession.set(sid, arr);
+}
+function getSessionResolvers(sid) {
+  if (!feedbackResolversBySession.has(sid)) feedbackResolversBySession.set(sid, []);
+  return feedbackResolversBySession.get(sid);
+}
+function getSessionClients(sid) {
+  if (!connectedClientsBySession.has(sid)) connectedClientsBySession.set(sid, new Set());
+  return connectedClientsBySession.get(sid);
+}
+
+// UUID format validation for session IDs
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidSessionId(id) {
+  return typeof id === 'string' && UUID_RE.test(id);
+}
+
+// Helper to parse JSON body from an HTTP request
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", chunk => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); }
+      catch (err) { reject(err); }
+    });
+  });
+}
+
 // Helper to generate pending feedback summary (without full payloads)
-function getPendingSummary() {
+function getPendingSummary(sessionId) {
+  const pending = sessionId ? getSessionPending(sessionId) : [];
   return {
-    count: pendingFeedback.length,
-    items: pendingFeedback.map(f => ({
+    count: pending.length,
+    items: pending.map(f => ({
       id: f.id,
       timestamp: f.timestamp || f.receivedAt,
       description: f.description ? f.description.slice(0, 100) : '',
@@ -39,11 +91,11 @@ function getPendingSummary() {
   };
 }
 
-// Broadcast pending status to all connected clients
-function broadcastPendingStatus() {
-  const status = getPendingSummary();
+// Broadcast pending status to session-specific connected clients
+function broadcastPendingStatus(sessionId) {
+  const status = getPendingSummary(sessionId);
   const message = JSON.stringify({ type: 'pending_status', ...status });
-  for (const client of connectedClients) {
+  for (const client of getSessionClients(sessionId)) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
@@ -51,9 +103,12 @@ function broadcastPendingStatus() {
 }
 
 // Helper to fetch status from the running HTTP server
-async function fetchServerStatus() {
+async function fetchServerStatus(sessionId) {
   try {
-    const response = await fetch(`http://localhost:${PORT}/status`);
+    const url = sessionId
+      ? `http://localhost:${PORT}/status?session=${sessionId}`
+      : `http://localhost:${PORT}/status`;
+    const response = await fetch(url);
     if (response.ok) {
       return await response.json();
     }
@@ -66,7 +121,7 @@ async function fetchServerStatus() {
 // Helper to fetch ready feedback from the running HTTP server
 async function fetchReadyFeedback(clear = true) {
   try {
-    const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}`);
+    const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}&session=${SESSION_ID}`);
     if (response.ok) {
       return await response.json();
     }
@@ -95,7 +150,7 @@ async function pollForFeedback(timeoutSeconds) {
 // Helper to broadcast message via the running HTTP server
 async function broadcastViaHttp(message) {
   try {
-    const response = await fetch(`http://localhost:${PORT}/broadcast`, {
+    const response = await fetch(`http://localhost:${PORT}/broadcast?session=${SESSION_ID}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(message),
@@ -112,7 +167,7 @@ async function broadcastViaHttp(message) {
 // Helper to fetch pending summary from the running HTTP server
 async function fetchPendingSummary() {
   try {
-    const response = await fetch(`http://localhost:${PORT}/pending-summary`);
+    const response = await fetch(`http://localhost:${PORT}/pending-summary?session=${SESSION_ID}`);
     if (response.ok) {
       return await response.json();
     }
@@ -125,7 +180,7 @@ async function fetchPendingSummary() {
 // Helper to delete feedback via the running HTTP server
 async function deleteFeedbackViaHttp(id) {
   try {
-    const response = await fetch(`http://localhost:${PORT}/feedback/${id}`, {
+    const response = await fetch(`http://localhost:${PORT}/feedback/${id}?session=${SESSION_ID}`, {
       method: 'DELETE',
     });
     if (response.ok) {
@@ -135,6 +190,38 @@ async function deleteFeedbackViaHttp(id) {
     // Server not running or not reachable
   }
   return null;
+}
+
+// Helper to register this session with the owner server
+async function registerSessionViaHttp() {
+  const detected = detectProjectUrl(PROJECT_DIR);
+  try {
+    await fetch(`http://localhost:${PORT}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: SESSION_ID,
+        projectDir: PROJECT_DIR,
+        projectUrl: detected.url,
+        detectedFrom: detected.detectedFrom,
+      }),
+    });
+  } catch (err) {
+    // Server not reachable, session won't appear in registry
+  }
+}
+
+// Helper to unregister this session from the owner server
+async function unregisterSessionViaHttp() {
+  try {
+    await fetch(`http://localhost:${PORT}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: SESSION_ID }),
+    });
+  } catch (err) {
+    // Ignore errors during shutdown
+  }
 }
 
 // Helper to detect project URL from configuration files
@@ -294,15 +381,19 @@ const httpServer = http.createServer((req, res) => {
 
   if (urlObj.pathname === "/widget.js") {
     const widgetPath = path.join(__dirname, "widget.js");
+    const sessionParam = urlObj.searchParams.get('session') || '';
     fs.readFile(widgetPath, "utf8", (err, content) => {
       if (err) {
         res.writeHead(500);
         res.end("Error loading widget");
         return;
       }
-      // Inject runtime values into the widget
+      // Inject runtime values into the widget (including session ID for isolation)
+      const wsUrl = sessionParam
+        ? `ws://localhost:${PORT}/ws?session=${sessionParam}`
+        : `ws://localhost:${PORT}/ws`;
       const injectedContent = content
-        .replace("__WEBSOCKET_URL__", `ws://localhost:${PORT}/ws`)
+        .replace("__WEBSOCKET_URL__", wsUrl)
         .replace("__WIDGET_VERSION__", PKG_VERSION);
       res.writeHead(200, { "Content-Type": "application/javascript" });
       res.end(injectedContent);
@@ -339,24 +430,27 @@ const httpServer = http.createServer((req, res) => {
   }
 
   if (urlObj.pathname === "/status") {
+    const sessionId = urlObj.searchParams.get('session');
+    const response = {
+      status: "running",
+      port: PORT,
+      connectedClients: sessionId ? getSessionClients(sessionId).size : connectedClients.size,
+      pendingFeedback: sessionId ? getSessionPending(sessionId).length : 0,
+      sessions: sessionRegistry.size,
+    };
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        status: "running",
-        port: PORT,
-        connectedClients: connectedClients.size,
-        pendingFeedback: pendingFeedback.length,
-      })
-    );
+    res.end(JSON.stringify(response));
     return;
   }
 
   // GET /feedback - retrieve ready feedback (used by secondary MCP instances)
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
-    const feedback = [...readyFeedback];
+    const sessionId = urlObj.searchParams.get("session") || "default";
+    const sessionReady = getSessionReady(sessionId);
+    const feedback = [...sessionReady];
     if (shouldClear) {
-      readyFeedback = [];
+      setSessionReady(sessionId, []);
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ feedback }));
@@ -365,8 +459,9 @@ const httpServer = http.createServer((req, res) => {
 
   // GET /pending-summary - get summary of pending feedback without full payloads
   if (urlObj.pathname === "/pending-summary" && req.method === "GET") {
+    const sessionId = urlObj.searchParams.get("session") || "default";
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(getPendingSummary()));
+    res.end(JSON.stringify(getPendingSummary(sessionId)));
     return;
   }
 
@@ -374,12 +469,14 @@ const httpServer = http.createServer((req, res) => {
   const deleteMatch = urlObj.pathname.match(/^\/feedback\/([^/]+)$/);
   if (deleteMatch && req.method === "DELETE") {
     const idToDelete = deleteMatch[1];
-    const initialLength = pendingFeedback.length;
-    pendingFeedback = pendingFeedback.filter(f => f.id !== idToDelete);
-    const deleted = pendingFeedback.length < initialLength;
+    const sessionId = urlObj.searchParams.get("session") || "default";
+    const pending = getSessionPending(sessionId);
+    const initialLength = pending.length;
+    setSessionPending(sessionId, pending.filter(f => f.id !== idToDelete));
+    const deleted = getSessionPending(sessionId).length < initialLength;
 
     if (deleted) {
-      broadcastPendingStatus();
+      broadcastPendingStatus(sessionId);
     }
 
     res.writeHead(deleted ? 200 : 404, { "Content-Type": "application/json" });
@@ -392,25 +489,78 @@ const httpServer = http.createServer((req, res) => {
 
   // POST /broadcast - broadcast message to connected clients (used by secondary MCP instances)
   if (urlObj.pathname === "/broadcast" && req.method === "POST") {
-    let body = "";
-    req.on("data", chunk => { body += chunk; });
-    req.on("end", () => {
-      try {
-        const message = JSON.parse(body);
-        const data = JSON.stringify(message);
-        let sentCount = 0;
-        for (const client of connectedClients) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(data);
-            sentCount++;
-          }
+    const sessionId = urlObj.searchParams.get("session") || "default";
+    parseJsonBody(req).then((message) => {
+      const data = JSON.stringify(message);
+      let sentCount = 0;
+      for (const client of getSessionClients(sessionId)) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(data);
+          sentCount++;
         }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true, clientCount: sentCount }));
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON" }));
       }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, clientCount: sentCount }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
+    });
+    return;
+  }
+
+  // GET /sessions - list all registered sessions
+  if (urlObj.pathname === "/sessions" && req.method === "GET") {
+    const sessions = Array.from(sessionRegistry.values());
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ sessions }));
+    return;
+  }
+
+  // POST /register-session - register a proxy session
+  if (urlObj.pathname === "/register-session" && req.method === "POST") {
+    parseJsonBody(req).then((data) => {
+      if (!isValidSessionId(data.sessionId)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid session ID format" }));
+        return;
+      }
+      sessionRegistry.set(data.sessionId, {
+        sessionId: data.sessionId,
+        projectDir: data.projectDir,
+        projectUrl: data.projectUrl || null,
+        detectedFrom: data.detectedFrom || null,
+        registeredAt: new Date().toISOString(),
+      });
+      console.error(`[browser-feedback-mcp] Session registered: ${data.sessionId} (${data.projectDir})`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
+    });
+    return;
+  }
+
+  // POST /unregister-session - unregister a session on shutdown
+  if (urlObj.pathname === "/unregister-session" && req.method === "POST") {
+    parseJsonBody(req).then((data) => {
+      if (!isValidSessionId(data.sessionId)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid session ID format" }));
+        return;
+      }
+      sessionRegistry.delete(data.sessionId);
+      // Clean up session data
+      pendingFeedbackBySession.delete(data.sessionId);
+      readyFeedbackBySession.delete(data.sessionId);
+      feedbackResolversBySession.delete(data.sessionId);
+      connectedClientsBySession.delete(data.sessionId);
+      console.error(`[browser-feedback-mcp] Session unregistered: ${data.sessionId}`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    }).catch(() => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON" }));
     });
     return;
   }
@@ -430,54 +580,64 @@ wss.on("error", (err) => {
   console.error("[browser-feedback-mcp] WebSocket server error:", err.message);
 });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  // Extract session ID from WebSocket URL query params
+  const reqUrl = new URL(req.url, `http://localhost:${PORT}`);
+  const sessionId = reqUrl.searchParams.get('session') || 'default';
+  ws._sessionId = sessionId;
+
   connectedClients.add(ws);
-  console.error(`[browser-feedback-mcp] Client connected. Total: ${connectedClients.size}`);
+  getSessionClients(sessionId).add(ws);
+  console.error(`[browser-feedback-mcp] Client connected (session: ${sessionId}). Total: ${connectedClients.size}`);
 
   // Send connection confirmation
-  ws.send(JSON.stringify({ type: "connected", message: "Connected to Claude Code feedback server" }));
+  ws.send(JSON.stringify({ type: "connected", message: "Connected to Claude Code feedback server", sessionId }));
 
-  // Send current pending status to newly connected client
-  const status = getPendingSummary();
+  // Send current pending status for this session to newly connected client
+  const status = getPendingSummary(sessionId);
   ws.send(JSON.stringify({ type: 'pending_status', ...status }));
 
   ws.on("message", (data) => {
     try {
       const message = JSON.parse(data.toString());
+      const sid = ws._sessionId;
 
       if (message.type === "feedback") {
-        console.error(`[browser-feedback-mcp] Received feedback from browser`);
+        console.error(`[browser-feedback-mcp] Received feedback from browser (session: ${sid})`);
 
         const feedback = {
           ...message.payload,
           receivedAt: new Date().toISOString(),
         };
 
-        pendingFeedback.push(feedback);
+        getSessionPending(sid).push(feedback);
 
         // Acknowledge receipt
         ws.send(JSON.stringify({ type: "feedback_received", id: feedback.id }));
 
-        // Broadcast updated pending status to all clients
-        broadcastPendingStatus();
+        // Broadcast updated pending status to this session's clients
+        broadcastPendingStatus(sid);
       }
 
       if (message.type === "send_to_claude") {
+        const pending = getSessionPending(sid);
+        const ready = getSessionReady(sid);
         // Move all pending items to ready
-        readyFeedback.push(...pendingFeedback);
-        pendingFeedback = [];
-        broadcastPendingStatus();
+        ready.push(...pending);
+        setSessionPending(sid, []);
+        broadcastPendingStatus(sid);
 
-        const count = readyFeedback.length;
+        const count = ready.length;
 
-        // Resolve any waiting promises with the batch
-        if (feedbackResolvers.length > 0) {
-          while (feedbackResolvers.length > 0) {
-            const resolver = feedbackResolvers.shift();
-            resolver([...readyFeedback]);
+        // Resolve any waiting promises for this session with the batch
+        const resolvers = getSessionResolvers(sid);
+        if (resolvers.length > 0) {
+          while (resolvers.length > 0) {
+            const resolver = resolvers.shift();
+            resolver([...ready]);
           }
           // Clear after resolvers consumed, so get_pending_feedback won't double-deliver
-          readyFeedback = [];
+          setSessionReady(sid, []);
         }
 
         // Acknowledge to browser
@@ -489,14 +649,15 @@ wss.on("connection", (ws) => {
 
       if (message.type === "delete_feedback") {
         const idToDelete = message.id;
-        const initialLength = pendingFeedback.length;
-        pendingFeedback = pendingFeedback.filter(f => f.id !== idToDelete);
-        const deleted = pendingFeedback.length < initialLength;
+        const pending = getSessionPending(sid);
+        const initialLength = pending.length;
+        setSessionPending(sid, pending.filter(f => f.id !== idToDelete));
+        const deleted = getSessionPending(sid).length < initialLength;
 
         if (deleted) {
-          console.error(`[browser-feedback-mcp] Deleted feedback: ${idToDelete}`);
-          // Broadcast updated pending status to all clients
-          broadcastPendingStatus();
+          console.error(`[browser-feedback-mcp] Deleted feedback: ${idToDelete} (session: ${sid})`);
+          // Broadcast updated pending status to this session's clients
+          broadcastPendingStatus(sid);
         }
 
         ws.send(JSON.stringify({
@@ -512,14 +673,16 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     connectedClients.delete(ws);
-    console.error(`[browser-feedback-mcp] Client disconnected. Total: ${connectedClients.size}`);
+    getSessionClients(ws._sessionId).delete(ws);
+    console.error(`[browser-feedback-mcp] Client disconnected (session: ${ws._sessionId}). Total: ${connectedClients.size}`);
   });
 });
 
-// Broadcast to all connected clients
-function broadcast(message) {
+// Broadcast to session-specific connected clients
+function broadcast(message, sessionId) {
   const data = JSON.stringify(message);
-  for (const client of connectedClients) {
+  const clients = sessionId ? getSessionClients(sessionId) : connectedClients;
+  for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(data);
     }
@@ -861,7 +1024,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     var isDevHost = ${hostnameCheck};
     if (isDevHost) {
       var s = document.createElement('script');
-      s.src = 'http://localhost:${PORT}/widget.js';
+      s.src = 'http://localhost:${PORT}/widget.js?session=${SESSION_ID}';
       s.id = 'claude-feedback-widget-script';
       document.body.appendChild(s);
     }
@@ -871,7 +1034,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
         hostnameInfo = 'Always loaded';
         scriptTag = `
 <!-- Claude Code Browser Feedback Widget -->
-<script src="http://localhost:${PORT}/widget.js" id="claude-feedback-widget-script"></script>`;
+<script src="http://localhost:${PORT}/widget.js?session=${SESSION_ID}" id="claude-feedback-widget-script"></script>`;
       }
 
       // Find injection point (before </body> or </html>)
@@ -1016,7 +1179,7 @@ Next steps:
     }
 
     case "get_widget_snippet": {
-      const snippet = `<script src="http://localhost:${PORT}/widget.js"></script>`;
+      const snippet = `<script src="http://localhost:${PORT}/widget.js?session=${SESSION_ID}"></script>`;
       const instructions = `
 Add this script tag to your web application's HTML (typically before </body>):
 
@@ -1069,9 +1232,10 @@ The widget only loads in development (localhost) by default.
       }
 
       // Check if there's already ready feedback (user clicked "Send to Claude")
-      if (readyFeedback.length > 0) {
-        const items = [...readyFeedback];
-        readyFeedback = [];
+      const ready = getSessionReady(SESSION_ID);
+      if (ready.length > 0) {
+        const items = [...ready];
+        setSessionReady(SESSION_ID, []);
         return {
           content: formatFeedbackAsContent(items),
         };
@@ -1080,7 +1244,7 @@ The widget only loads in development (localhost) by default.
       // Wait for user to click "Send to Claude"
       const feedback = await Promise.race([
         new Promise((resolve) => {
-          feedbackResolvers.push(resolve);
+          getSessionResolvers(SESSION_ID).push(resolve);
         }),
         new Promise((_, reject) =>
           setTimeout(
@@ -1128,9 +1292,10 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const feedback = [...readyFeedback];
+      const sessionReady = getSessionReady(SESSION_ID);
+      const feedback = [...sessionReady];
       if (shouldClear) {
-        readyFeedback = [];
+        setSessionReady(SESSION_ID, []);
       }
 
       if (feedback.length === 0) {
@@ -1184,7 +1349,7 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const summary = getPendingSummary();
+      const summary = getPendingSummary(SESSION_ID);
       if (summary.count === 0) {
         return {
           content: [
@@ -1245,12 +1410,13 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const initialLength = pendingFeedback.length;
-      pendingFeedback = pendingFeedback.filter(f => f.id !== id);
-      const deleted = pendingFeedback.length < initialLength;
+      const pending = getSessionPending(SESSION_ID);
+      const initialLength = pending.length;
+      setSessionPending(SESSION_ID, pending.filter(f => f.id !== id));
+      const deleted = getSessionPending(SESSION_ID).length < initialLength;
 
       if (deleted) {
-        broadcastPendingStatus();
+        broadcastPendingStatus(SESSION_ID);
       }
 
       return {
@@ -1272,7 +1438,7 @@ The widget only loads in development (localhost) by default.
       // If we don't own the HTTP server, use a simpler polling approach
       if (!isHttpServerOwner) {
         // Check connection status first
-        const status = await fetchServerStatus();
+        const status = await fetchServerStatus(SESSION_ID);
         if (!status || status.connectedClients === 0) {
           return {
             content: [
@@ -1325,7 +1491,8 @@ The widget only loads in development (localhost) by default.
         };
       }
 
-      if (connectedClients.size === 0) {
+      const sessionClients = getSessionClients(SESSION_ID);
+      if (sessionClients.size === 0) {
         return {
           content: [
             {
@@ -1336,21 +1503,22 @@ The widget only loads in development (localhost) by default.
         };
       }
 
-      // Clear stale queues
-      readyFeedback = [];
-      pendingFeedback = [];
-      broadcastPendingStatus();
+      // Clear stale queues for this session
+      setSessionReady(SESSION_ID, []);
+      setSessionPending(SESSION_ID, []);
+      broadcastPendingStatus(SESSION_ID);
 
       // Send request to browser to enter multi-feedback mode
       broadcast({
         type: "request_multiple_annotations",
         message: message,
-      });
+      }, SESSION_ID);
 
-      // Check if readyFeedback already has items (early return)
-      if (readyFeedback.length > 0) {
-        const items = [...readyFeedback];
-        readyFeedback = [];
+      // Check if ready feedback already has items (early return)
+      const readyNow = getSessionReady(SESSION_ID);
+      if (readyNow.length > 0) {
+        const items = [...readyNow];
+        setSessionReady(SESSION_ID, []);
         return {
           content: formatFeedbackAsContent(items),
         };
@@ -1360,7 +1528,7 @@ The widget only loads in development (localhost) by default.
       try {
         const allFeedback = await Promise.race([
           new Promise((resolve) => {
-            feedbackResolvers.push(resolve);
+            getSessionResolvers(SESSION_ID).push(resolve);
           }),
           new Promise((_, reject) =>
             setTimeout(
@@ -1410,7 +1578,8 @@ The widget only loads in development (localhost) by default.
                     connected: status.connectedClients > 0,
                     clientCount: status.connectedClients,
                     serverUrl: `http://localhost:${PORT}`,
-                    widgetUrl: `http://localhost:${PORT}/widget.js`,
+                    widgetUrl: `http://localhost:${PORT}/widget.js?session=${SESSION_ID}`,
+                    sessionId: SESSION_ID,
                     note: "Status fetched from running server (this MCP instance is proxying)",
                   },
                   null,
@@ -1441,16 +1610,18 @@ The widget only loads in development (localhost) by default.
         }
       }
 
+      const sessionClientCount = getSessionClients(SESSION_ID).size;
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify(
               {
-                connected: connectedClients.size > 0,
-                clientCount: connectedClients.size,
+                connected: sessionClientCount > 0,
+                clientCount: sessionClientCount,
                 serverUrl: `http://localhost:${PORT}`,
-                widgetUrl: `http://localhost:${PORT}/widget.js`,
+                widgetUrl: `http://localhost:${PORT}/widget.js?session=${SESSION_ID}`,
+                sessionId: SESSION_ID,
               },
               null,
               2
@@ -1492,7 +1663,8 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      if (connectedClients.size === 0) {
+      const sessionClientCount = getSessionClients(SESSION_ID).size;
+      if (sessionClientCount === 0) {
         return {
           content: [
             {
@@ -1506,13 +1678,13 @@ The widget only loads in development (localhost) by default.
       broadcast({
         type: "request_annotation",
         message: message,
-      });
+      }, SESSION_ID);
 
       return {
         content: [
           {
             type: "text",
-            text: `Annotation request sent to ${connectedClients.size} connected browser(s). The user will see a prompt asking them to annotate.`,
+            text: `Annotation request sent to ${sessionClientCount} connected browser(s). The user will see a prompt asking them to annotate.`,
           },
         ],
       };
@@ -1681,6 +1853,9 @@ function shutdown(reason) {
 
   // Only close HTTP server if we own it
   if (isHttpServerOwner) {
+    // Remove own session from registry
+    sessionRegistry.delete(SESSION_ID);
+
     // Close all WebSocket connections
     for (const client of connectedClients) {
       try {
@@ -1707,8 +1882,12 @@ function shutdown(reason) {
       process.exit(0);
     }, 2000);
   } else {
-    // Not the HTTP server owner, just exit
-    process.exit(0);
+    // Unregister from owner server before exit
+    unregisterSessionViaHttp().finally(() => {
+      process.exit(0);
+    });
+    // Force exit after timeout
+    setTimeout(() => process.exit(0), 2000);
   }
 }
 
@@ -1779,6 +1958,24 @@ async function main() {
 
   // Start HTTP/WebSocket server (may fail if port is in use, but MCP will still work)
   await tryListenWithRetry();
+
+  // Register this session
+  const detected = detectProjectUrl(PROJECT_DIR);
+  if (isHttpServerOwner) {
+    // Owner registers directly
+    sessionRegistry.set(SESSION_ID, {
+      sessionId: SESSION_ID,
+      projectDir: PROJECT_DIR,
+      projectUrl: detected.url,
+      detectedFrom: detected.detectedFrom,
+      registeredAt: new Date().toISOString(),
+    });
+    console.error(`[browser-feedback-mcp] Session: ${SESSION_ID}`);
+  } else {
+    // Proxy registers via HTTP
+    await registerSessionViaHttp();
+    console.error(`[browser-feedback-mcp] Session registered: ${SESSION_ID}`);
+  }
 }
 
 main().catch((error) => {

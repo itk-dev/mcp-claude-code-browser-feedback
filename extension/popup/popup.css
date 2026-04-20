@@ -156,3 +156,52 @@ hr {
 .url-row button:hover {
   background: #c5654a;
 }
+
+/* Session picker */
+.session-picker {
+  margin-bottom: 12px;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.session-item:hover {
+  border-color: #da7756;
+  background: #fef7f4;
+}
+
+.session-item.active {
+  border-color: #da7756;
+  background: #fef7f4;
+}
+
+.session-item-dir {
+  font-family: monospace;
+  font-size: 12px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-url {
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
