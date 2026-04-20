@@ -262,34 +262,20 @@
     </div>
   </div>
   
-  <!-- Buggy JavaScript for console errors -->
   <script>
-    // Generate some console logs for testing
     console.log('App initialized');
-    console.warn('This is a warning message');
-    
+
     // Form with intentional error
     document.getElementById('buggy-form').addEventListener('submit', function(e) {
       e.preventDefault();
-      
-      // Intentional error
       try {
         const user = null;
-        console.log('Processing for:', user.email); // This will throw
+        console.log('Processing for:', user.email);
       } catch (err) {
         console.error('Form submission failed:', err.message);
         document.getElementById('form-error').style.display = 'block';
       }
     });
-    
-    // Simulate some async errors
-    setTimeout(() => {
-      console.log('Checking for updates...');
-    }, 1000);
-    
-    setTimeout(() => {
-      console.warn('Session will expire in 5 minutes');
-    }, 2000);
   </script>
 </body>
 </html>
