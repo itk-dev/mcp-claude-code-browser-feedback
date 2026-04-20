@@ -157,6 +157,14 @@ hr {
   background: #c5654a;
 }
 
+/* Connection notice */
+.connection-notice {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
 /* Active session display */
 .active-session {
   display: flex;

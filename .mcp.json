@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "browser-feedback": {
-      "command": "npx",
-      "args": ["-y", "github:itk-dev/mcp-claude-code-browser-feedback"]
+      "command": "node",
+      "args": ["src/server.js"]
     }
   }
 }

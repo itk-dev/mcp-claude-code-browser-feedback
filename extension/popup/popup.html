@@ -12,37 +12,41 @@
     <span class="title">Browser Feedback</span>
   </div>
 
-  <div class="status-row">
-    <span class="status-dot" id="status-dot"></span>
-    <span class="status-text" id="status-text">Checking...</span>
-  </div>
-
-  <div id="active-session" class="active-session" style="display: none;">
-    <span class="active-session-label">Session:</span>
-    <span id="active-session-name" class="active-session-name"></span>
-    <button id="change-session" class="change-session-btn" title="Change session">Change</button>
-  </div>
-
   <div class="toggle-row">
-    <span class="toggle-label">Widget on this tab</span>
+    <span class="toggle-label">Enable widget on this page</span>
     <label class="toggle-switch">
       <input type="checkbox" id="toggle">
       <span class="toggle-slider"></span>
     </label>
   </div>
 
-  <div id="session-picker" class="session-picker" style="display: none;">
-    <label class="settings-label">Select project session</label>
-    <div id="session-list" class="session-list"></div>
-  </div>
+  <div id="widget-details" style="display: none;">
+    <div class="status-row">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">Connecting...</span>
+    </div>
 
-  <hr>
+    <div id="connection-notice" class="connection-notice" style="display: none;"></div>
 
-  <div class="settings">
-    <label class="settings-label" for="server-url">Server URL</label>
-    <div class="url-row">
-      <input type="text" id="server-url" placeholder="http://localhost:9877">
-      <button id="save-url" title="Save">Save</button>
+    <div id="active-session" class="active-session" style="display: none;">
+      <span class="active-session-label">Session:</span>
+      <span id="active-session-name" class="active-session-name"></span>
+      <button id="change-session" class="change-session-btn" title="Change session">Change</button>
+    </div>
+
+    <div id="session-picker" class="session-picker" style="display: none;">
+      <label class="settings-label">Select project session</label>
+      <div id="session-list" class="session-list"></div>
+    </div>
+
+    <hr>
+
+    <div class="settings">
+      <label class="settings-label" for="server-url">Server URL</label>
+      <div class="url-row">
+        <input type="text" id="server-url" placeholder="http://localhost:9877">
+        <button id="save-url" title="Save">Save</button>
+      </div>
     </div>
   </div>
 

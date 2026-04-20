@@ -1,4 +1,5 @@
 const toggleEl = document.getElementById('toggle');
+const widgetDetailsEl = document.getElementById('widget-details');
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
 const serverUrlInput = document.getElementById('server-url');
@@ -8,6 +9,7 @@ const sessionListEl = document.getElementById('session-list');
 const activeSessionEl = document.getElementById('active-session');
 const activeSessionName = document.getElementById('active-session-name');
 const changeSessionBtn = document.getElementById('change-session');
+const connectionNoticeEl = document.getElementById('connection-notice');
 
 let currentTabId = null;
 let currentSessionId = null;
@@ -18,7 +20,7 @@ async function getCurrentTab() {
   return tab;
 }
 
-// Check if the MCP server is reachable
+// Check if the MCP server is reachable and update status display
 async function checkConnection(serverUrl, sessionId) {
   try {
     const url = sessionId
@@ -29,7 +31,18 @@ async function checkConnection(serverUrl, sessionId) {
       const data = await resp.json();
       const count = data.connectedClients || 0;
       statusDot.className = 'status-dot connected';
-      statusText.textContent = `Connected (${count} client${count !== 1 ? 's' : ''}, port ${data.port || serverUrl.split(':').pop()})`;
+      if (sessionId && count > 0) {
+        statusText.textContent = `Connected (${count} client${count !== 1 ? 's' : ''})`;
+      } else {
+        statusText.textContent = 'Connected';
+      }
+      // Show notice when multiple clients on same session
+      if (sessionId && count > 1) {
+        connectionNoticeEl.textContent = `This session has ${count} connected clients. The same site may be open in another tab.`;
+        connectionNoticeEl.style.display = 'block';
+      } else {
+        connectionNoticeEl.style.display = 'none';
+      }
       return true;
     }
   } catch {
@@ -37,6 +50,7 @@ async function checkConnection(serverUrl, sessionId) {
   }
   statusDot.className = 'status-dot disconnected';
   statusText.textContent = 'Server not reachable';
+  connectionNoticeEl.style.display = 'none';
   return false;
 }
 
@@ -50,7 +64,6 @@ function showSessionPicker(sessions) {
 
     const dirEl = document.createElement('div');
     dirEl.className = 'session-item-dir';
-    // Show last path segment as label, full path as tooltip
     const dirLabel = session.projectDir.split('/').pop() || session.projectDir;
     dirEl.textContent = dirLabel;
     dirEl.title = session.projectDir;
@@ -80,37 +93,55 @@ function showSessionPicker(sessions) {
   sessionPickerEl.style.display = 'block';
 }
 
+// Show widget details (status, session, server URL)
+async function showDetails(serverUrl, sessionId) {
+  widgetDetailsEl.style.display = 'block';
+  serverUrlInput.value = serverUrl;
+  currentSessionId = sessionId;
+
+  await checkConnection(serverUrl, sessionId);
+
+  // Show active session info
+  if (sessionId) {
+    chrome.runtime.sendMessage({ action: 'getSessions' }, (sessionsResp) => {
+      if (sessionsResp && sessionsResp.sessions) {
+        const matched = sessionsResp.sessions.find(s => s.sessionId === sessionId);
+        activeSessionName.textContent = matched
+          ? (matched.projectDir.split('/').pop() || matched.projectDir)
+          : sessionId.slice(0, 8) + '...';
+        activeSessionName.title = matched ? matched.projectDir : sessionId;
+        activeSessionEl.style.display = 'flex';
+      }
+    });
+  } else {
+    activeSessionEl.style.display = 'none';
+  }
+}
+
+// Hide widget details
+function hideDetails() {
+  widgetDetailsEl.style.display = 'none';
+  sessionPickerEl.style.display = 'none';
+  connectionNoticeEl.style.display = 'none';
+  activeSessionEl.style.display = 'none';
+}
+
 // Initialize popup state
 async function init() {
   const tab = await getCurrentTab();
   if (!tab) return;
   currentTabId = tab.id;
 
-  // Get current state from background
   chrome.runtime.sendMessage({ action: 'getState', tabId: currentTabId }, async (response) => {
     if (chrome.runtime.lastError) return;
     if (!response) return;
 
     toggleEl.checked = response.active;
-    serverUrlInput.value = response.serverUrl;
-    currentSessionId = response.sessionId || null;
-    sessionPickerEl.style.display = 'none';
-    await checkConnection(response.serverUrl, currentSessionId);
 
-    // Show active session info
-    if (currentSessionId) {
-      chrome.runtime.sendMessage({ action: 'getSessions' }, (sessionsResp) => {
-        if (sessionsResp && sessionsResp.sessions) {
-          const matched = sessionsResp.sessions.find(s => s.sessionId === currentSessionId);
-          activeSessionName.textContent = matched
-            ? (matched.projectDir.split('/').pop() || matched.projectDir)
-            : currentSessionId.slice(0, 8) + '...';
-          activeSessionName.title = matched ? matched.projectDir : currentSessionId;
-          activeSessionEl.style.display = 'flex';
-        }
-      });
+    if (response.active) {
+      await showDetails(response.serverUrl, response.sessionId || null);
     } else {
-      activeSessionEl.style.display = 'none';
+      hideDetails();
     }
   });
 }
@@ -118,13 +149,17 @@ async function init() {
 // Toggle handler
 toggleEl.addEventListener('change', () => {
   if (currentTabId === null) return;
-  chrome.runtime.sendMessage({ action: 'toggle', tabId: currentTabId }, (response) => {
+  chrome.runtime.sendMessage({ action: 'toggle', tabId: currentTabId }, async (response) => {
     if (chrome.runtime.lastError) return;
     if (!response) return;
 
     if (response.needsSessionPicker) {
-      // Multiple sessions, no auto-match — show picker
       toggleEl.checked = false;
+      // Show details container for the session picker
+      widgetDetailsEl.style.display = 'block';
+      chrome.runtime.sendMessage({ action: 'getState', tabId: currentTabId }, (stateResp) => {
+        if (stateResp) serverUrlInput.value = stateResp.serverUrl;
+      });
       chrome.runtime.sendMessage({ action: 'getSessions' }, (sessionsResp) => {
         if (sessionsResp && sessionsResp.sessions) {
           showSessionPicker(sessionsResp.sessions);
@@ -133,6 +168,12 @@ toggleEl.addEventListener('change', () => {
     } else {
       toggleEl.checked = response.active ?? false;
       sessionPickerEl.style.display = 'none';
+      if (response.active) {
+        // Re-init to fetch session info and show details
+        init();
+      } else {
+        hideDetails();
+      }
     }
   });
 });

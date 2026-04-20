@@ -1202,7 +1202,6 @@
       }
       if (message.duplicateWarning) {
         console.warn('[Claude Feedback]', message.duplicateWarning);
-        showNotification(message.duplicateWarning);
       }
     } else if (message.type === 'pending_status') {
       // Update pending items from server
@@ -1754,7 +1753,6 @@
 
   function showNotification(message) {
     console.log('[Claude Feedback]', message);
-    showSuccess(message);
   }
 
   // ============================================
