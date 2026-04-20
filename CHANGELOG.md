@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extension popup now shows session-scoped client count instead of global count across all sessions
 - Extension popup shows just "Connected" when no session is active (no misleading client counts)
 - Duplicate-tab warning moved from widget toast to inline text in extension popup
+- Demo page widget loads without session ID — server now injects session ID at serve-time, and URL changed to relative path
 - Stale MCP processes no longer block port binding — on EADDRINUSE, the server now health-checks the existing process and retries up to 3 times before falling back to proxy mode
 
 ## [0.5.0] - 2026-04-13

@@ -268,8 +268,13 @@ const httpServer = http.createServer((req, res) => {
         res.end("Demo page not found");
         return;
       }
+      // Inject session ID into widget script URL
+      const injected = content.replace(
+        /src="\/widget\.js"/,
+        `src="/widget.js?session=${SESSION_ID}"`
+      );
       res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(content);
+      res.end(injected);
     });
     return;
   }
