@@ -14,12 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session registry with `/register-session` and `/unregister-session` endpoints for proxy instances
 - Browser extension auto-matches tabs to sessions based on detected project URL; shows a session picker when multiple sessions are ambiguous
 - Session ID included in widget URL, WebSocket connections, and all feedback messages for full isolation
+- Test infrastructure with Vitest — unit tests for utils and integration tests for HTTP endpoints
+- GitHub Actions CI workflow running tests on Node 20 and 22
 
 ### Changed
 
 - Removed unused `sessionId` fields from widget WebSocket messages (session is derived from the WebSocket connection URL)
 - Extracted `parseJsonBody()` helper to reduce code duplication in HTTP POST endpoints
 - Added UUID format validation on `/register-session` and `/unregister-session` endpoints
+- Extracted `isValidSessionId`, `getPendingSummary`, `detectProjectUrl`, and `formatFeedbackAsContent` into `src/utils.js` for testability
 
 ### Fixed
 

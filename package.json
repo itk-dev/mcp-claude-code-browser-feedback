@@ -8,7 +8,9 @@
     "browser-feedback-mcp": "./src/server.js"
   },
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
@@ -34,5 +36,8 @@
     "debugging",
     "model-context-protocol"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  }
 }
