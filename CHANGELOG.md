@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-21
+
 ### Fixed
 
 - Install plugin dependencies via `SessionStart` hook into the plugin data directory, and resolve `html2canvas` using `createRequire` so it works when `node_modules` lives outside the plugin root
