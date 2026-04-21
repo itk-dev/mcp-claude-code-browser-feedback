@@ -11,7 +11,8 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
+import { createRequire } from "module";
 import { execFile } from "child_process";
 import { isValidSessionId, getPendingSummary, detectProjectUrl, formatFeedbackAsContent } from "./utils.js";
 
@@ -247,7 +248,8 @@ const httpServer = http.createServer((req, res) => {
   }
 
   if (urlObj.pathname === "/html2canvas.min.js") {
-    const html2canvasPath = path.join(__dirname, "..", "node_modules", "html2canvas", "dist", "html2canvas.min.js");
+    const require = createRequire(import.meta.url);
+    const html2canvasPath = path.join(path.dirname(require.resolve("html2canvas/package.json")), "dist", "html2canvas.min.js");
     fs.readFile(html2canvasPath, "utf8", (err, content) => {
       if (err) {
         res.writeHead(404);
