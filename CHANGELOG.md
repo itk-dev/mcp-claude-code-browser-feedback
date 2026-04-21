@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix plugin dependency resolution for ES modules — `NODE_PATH` is ignored by Node.js ESM, so the `SessionStart` hook now symlinks `node_modules` into the plugin root instead
+
 ## [0.6.4] - 2026-04-21
 
 ### Fixed
