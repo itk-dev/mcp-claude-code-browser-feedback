@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Handle EPERM error as port-in-use when binding HTTP server, allowing proxy mode to work on macOS
+
 ## [0.6.0] - 2026-04-20
 
 ### Added

@@ -1768,7 +1768,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // ============================================
 
 // Try to bind the HTTP server with health-check-and-retry for stale processes.
-// When EADDRINUSE occurs, we check if the existing server is healthy (GET /status).
+// When EADDRINUSE/EPERM occurs, we check if the existing server is healthy (GET /status).
 // If healthy, we accept proxy mode. If not (zombie process), we wait and retry.
 async function tryListenWithRetry(maxRetries = 3, retryDelay = 1000) {
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -1790,7 +1790,7 @@ async function tryListenWithRetry(maxRetries = 3, retryDelay = 1000) {
       console.error(`[browser-feedback-mcp] Widget available at http://localhost:${PORT}/widget.js`);
       return;
     } catch (err) {
-      if (err.code !== 'EADDRINUSE') {
+      if (err.code !== 'EADDRINUSE' && err.code !== 'EPERM') {
         console.error(`[browser-feedback-mcp] HTTP server error:`, err);
         return; // Non-retryable error, fall back to proxy mode
       }
