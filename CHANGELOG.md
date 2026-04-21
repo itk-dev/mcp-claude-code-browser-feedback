@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-04-21
+
 ### Fixed
 
 - Fix plugin dependency resolution for ES modules — `NODE_PATH` is ignored by Node.js ESM, so the `SessionStart` hook now symlinks `node_modules` into the plugin root instead
@@ -197,6 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Widget only connects to localhost
 - No external data transmission
 
+[0.6.5]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/itk-dev/mcp-claude-code-browser-feedback/compare/v0.6.0...v0.6.1
