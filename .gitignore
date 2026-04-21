@@ -3,6 +3,7 @@ node_modules/
 
 # Claude Code
 .claude/
+.mcp.json
 
 # OS files
 .DS_Store
