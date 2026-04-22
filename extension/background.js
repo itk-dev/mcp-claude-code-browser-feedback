@@ -105,6 +105,35 @@ async function resolveSessionForTab(tabUrl, serverUrl) {
   return null;
 }
 
+// Validate that a cached session still exists on the server; re-resolve if stale
+async function validateOrRefreshSession(tabId, cachedSessionId, serverUrl) {
+  if (!cachedSessionId) {
+    const tab = await chrome.tabs.get(tabId);
+    const resolved = await resolveSessionForTab(tab.url, serverUrl);
+    if (resolved) {
+      tabSessionMap.set(tabId, resolved);
+      persistActiveTabs();
+    }
+    return resolved;
+  }
+
+  const sessions = await fetchSessions(serverUrl);
+  if (sessions.length === 0) return cachedSessionId; // Server unreachable, keep cached
+
+  const stillExists = sessions.some(s => s.sessionId === cachedSessionId);
+  if (stillExists) return cachedSessionId;
+
+  // Session is stale — re-resolve by project URL
+  const tab = await chrome.tabs.get(tabId);
+  const resolved = await resolveSessionForTab(tab.url, serverUrl);
+  if (resolved) {
+    tabSessionMap.set(tabId, resolved);
+    persistActiveTabs();
+    console.log(`[Feedback Ext] Session refreshed: ${cachedSessionId.slice(0, 8)} -> ${resolved.slice(0, 8)}`);
+  }
+  return resolved || cachedSessionId;
+}
+
 // Toggle widget on a specific tab
 async function toggleTab(tabId) {
   const serverUrl = await getServerUrl();
@@ -155,11 +184,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Called by content script on page load
     const tabId = sender.tab?.id;
     if (tabId && activeTabs.has(tabId)) {
-      getServerUrl().then((serverUrl) => {
+      getServerUrl().then(async (serverUrl) => {
+        const cachedSession = tabSessionMap.get(tabId) || null;
+        const sessionId = await validateOrRefreshSession(tabId, cachedSession, serverUrl);
         sendResponse({
           active: true,
           serverUrl,
-          sessionId: tabSessionMap.get(tabId) || null,
+          sessionId,
         });
       });
       return true; // async response
@@ -218,7 +249,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status === 'complete' && activeTabs.has(tabId)) {
     const serverUrl = await getServerUrl();
-    const sessionId = tabSessionMap.get(tabId) || null;
+    const cachedSession = tabSessionMap.get(tabId) || null;
+    const sessionId = await validateOrRefreshSession(tabId, cachedSession, serverUrl);
     updateBadge(tabId, true);
     await sendToTab(tabId, { action: 'activate', serverUrl, sessionId });
   }

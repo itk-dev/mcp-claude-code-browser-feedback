@@ -3,11 +3,40 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+  deriveSessionId,
   isValidSessionId,
   getPendingSummary,
   detectProjectUrl,
   formatFeedbackAsContent,
 } from '../src/utils.js';
+
+// ============================================
+// deriveSessionId
+// ============================================
+
+describe('deriveSessionId', () => {
+  it('returns a valid UUID-formatted session ID', () => {
+    const id = deriveSessionId('/home/user/project');
+    expect(isValidSessionId(id)).toBe(true);
+  });
+
+  it('returns the same ID for the same project directory', () => {
+    const id1 = deriveSessionId('/home/user/project');
+    const id2 = deriveSessionId('/home/user/project');
+    expect(id1).toBe(id2);
+  });
+
+  it('returns different IDs for different project directories', () => {
+    const id1 = deriveSessionId('/home/user/project-a');
+    const id2 = deriveSessionId('/home/user/project-b');
+    expect(id1).not.toBe(id2);
+  });
+
+  it('returns lowercase hex characters', () => {
+    const id = deriveSessionId('/some/path');
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+});
 
 // ============================================
 // isValidSessionId

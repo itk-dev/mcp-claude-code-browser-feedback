@@ -125,6 +125,47 @@ describe('session registration', () => {
     expect(found).toBeUndefined();
   });
 
+  it('POST /unregister-session skips deletion when processId does not match', async () => {
+    const sessionId = crypto.randomUUID();
+
+    // Register with processId 'proc-1'
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, processId: 'proc-1', projectDir: '/tmp/guard-test' }),
+    });
+
+    // Re-register with processId 'proc-2' (simulates new process taking over)
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, processId: 'proc-2', projectDir: '/tmp/guard-test' }),
+    });
+
+    // Old process tries to unregister with 'proc-1' — should be skipped
+    const unregResp = await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, processId: 'proc-1' }),
+    });
+    expect(unregResp.status).toBe(200);
+    const unregData = await unregResp.json();
+    expect(unregData.skipped).toBe(true);
+
+    // Session should still exist
+    const sessionsResp = await fetch(`${BASE_URL}/sessions`);
+    const sessionsData = await sessionsResp.json();
+    const found = sessionsData.sessions.find(s => s.sessionId === sessionId);
+    expect(found).toBeDefined();
+
+    // Clean up with correct processId
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, processId: 'proc-2' }),
+    });
+  });
+
   it('POST /unregister-session with invalid ID returns 400', async () => {
     const resp = await fetch(`${BASE_URL}/unregister-session`, {
       method: 'POST',
@@ -250,6 +291,65 @@ describe('WebSocket session routing', () => {
     } finally {
       ws.close();
     }
+  });
+
+  it('client reconnecting after session migration lands in correct bucket', async () => {
+    // Register session A with a projectDir, connect a WS client, submit feedback
+    const sessionA = crypto.randomUUID();
+    const sessionB = crypto.randomUUID();
+    const projectDir = '/tmp/migration-test-project';
+
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionA, processId: 'proc-a', projectDir }),
+    });
+
+    // Connect WS client to session A and submit feedback
+    const { ws: wsA, msg: msgA } = await connectWs(sessionA);
+    expect(msgA.sessionId).toBe(sessionA);
+
+    wsA.send(JSON.stringify({
+      type: 'feedback',
+      payload: { id: 'fb-migrate-1', description: 'Test feedback for migration' },
+    }));
+
+    // Wait for feedback to be stored
+    await new Promise(r => setTimeout(r, 100));
+
+    // Verify feedback exists under session A
+    const respA = await fetch(`${BASE_URL}/status?session=${sessionA}`);
+    const dataA = await respA.json();
+    expect(dataA.pendingFeedback).toBe(1);
+
+    wsA.close();
+    await new Promise(r => setTimeout(r, 100));
+
+    // Register session B with same projectDir — should migrate feedback
+    const regResp = await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionB, processId: 'proc-b', projectDir }),
+    });
+    expect(regResp.status).toBe(200);
+
+    // Verify feedback migrated to session B
+    const respB = await fetch(`${BASE_URL}/status?session=${sessionB}`);
+    const dataB = await respB.json();
+    expect(dataB.pendingFeedback).toBe(1);
+
+    // Verify session A no longer exists
+    const sessionsResp = await fetch(`${BASE_URL}/sessions`);
+    const sessionsData = await sessionsResp.json();
+    const foundA = sessionsData.sessions.find(s => s.sessionId === sessionA);
+    expect(foundA).toBeUndefined();
+
+    // Clean up
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionB, processId: 'proc-b' }),
+    });
   });
 
   it('second client on same session triggers duplicate warning', async () => {
