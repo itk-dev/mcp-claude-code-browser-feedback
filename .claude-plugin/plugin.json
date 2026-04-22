@@ -1,7 +1,7 @@
 {
   "name": "itkdev-browser-feedback",
   "description": "Browser-based visual feedback and annotation MCP server for Claude Code",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "author": {
     "name": "ITK Dev",
     "email": "itkdev@mkb.aarhus.dk"
