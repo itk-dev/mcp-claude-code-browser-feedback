@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix browser extension losing connection and feedback after MCP reconnect (`/mcp`) — session IDs are now derived deterministically from the project directory, so reconnecting preserves WebSocket connections and pending feedback (#43)
+- Add process ID guard on session unregistration to prevent race conditions when old and new MCP processes overlap
+- Add feedback migration when a new session registers with the same project directory as an existing session
+- Browser extension now validates cached session IDs on page navigation and auto-refreshes stale sessions
+
 ## [0.6.5] - 2026-04-21
 
 ### Fixed

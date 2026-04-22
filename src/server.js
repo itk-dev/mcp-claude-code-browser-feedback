@@ -14,7 +14,7 @@ import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createRequire } from "module";
 import { execFile } from "child_process";
-import { isValidSessionId, getPendingSummary, detectProjectUrl, formatFeedbackAsContent } from "./utils.js";
+import { deriveSessionId, isValidSessionId, getPendingSummary, detectProjectUrl, formatFeedbackAsContent } from "./utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,8 +23,9 @@ const PORT = parseInt(process.env.FEEDBACK_PORT || "9877");
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 
 // Session identity for this MCP server process
-const SESSION_ID = crypto.randomUUID();
 const PROJECT_DIR = process.cwd();
+const SESSION_ID = deriveSessionId(PROJECT_DIR);
+const PROCESS_ID = crypto.randomUUID();
 
 // Session registry (owner server only): sessionId -> metadata
 const sessionRegistry = new Map();
@@ -183,6 +184,7 @@ async function registerSessionViaHttp() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: SESSION_ID,
+        processId: PROCESS_ID,
         projectDir: PROJECT_DIR,
         projectUrl: detected.url,
         detectedFrom: detected.detectedFrom,
@@ -199,7 +201,7 @@ async function unregisterSessionViaHttp() {
     await fetch(`http://localhost:${PORT}/unregister-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: SESSION_ID }),
+      body: JSON.stringify({ sessionId: SESSION_ID, processId: PROCESS_ID }),
     });
   } catch (err) {
     // Ignore errors during shutdown
@@ -371,8 +373,36 @@ const httpServer = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: "Invalid session ID format" }));
         return;
       }
+      // Migrate feedback from any old session with the same projectDir but different sessionId
+      for (const [existingId, existingMeta] of sessionRegistry) {
+        if (existingId !== data.sessionId && existingMeta.projectDir === data.projectDir) {
+          const oldPending = pendingFeedbackBySession.get(existingId);
+          if (oldPending && oldPending.length > 0) {
+            getSessionPending(data.sessionId).push(...oldPending);
+          }
+          const oldReady = readyFeedbackBySession.get(existingId);
+          if (oldReady && oldReady.length > 0) {
+            getSessionReady(data.sessionId).push(...oldReady);
+          }
+          const oldClients = connectedClientsBySession.get(existingId);
+          if (oldClients && oldClients.size > 0) {
+            const newClients = getSessionClients(data.sessionId);
+            for (const client of oldClients) {
+              client._sessionId = data.sessionId;
+              newClients.add(client);
+            }
+          }
+          pendingFeedbackBySession.delete(existingId);
+          readyFeedbackBySession.delete(existingId);
+          feedbackResolversBySession.delete(existingId);
+          connectedClientsBySession.delete(existingId);
+          sessionRegistry.delete(existingId);
+          console.error(`[browser-feedback-mcp] Migrated session data: ${existingId} -> ${data.sessionId}`);
+        }
+      }
       sessionRegistry.set(data.sessionId, {
         sessionId: data.sessionId,
+        processId: data.processId || null,
         projectDir: data.projectDir,
         projectUrl: data.projectUrl || null,
         detectedFrom: data.detectedFrom || null,
@@ -394,6 +424,14 @@ const httpServer = http.createServer((req, res) => {
       if (!isValidSessionId(data.sessionId)) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid session ID format" }));
+        return;
+      }
+      // Guard: skip deletion if a different process has re-registered this session
+      const existing = sessionRegistry.get(data.sessionId);
+      if (existing && data.processId && existing.processId && existing.processId !== data.processId) {
+        console.error(`[browser-feedback-mcp] Skipping unregister: session ${data.sessionId} owned by different process`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true, skipped: true }));
         return;
       }
       sessionRegistry.delete(data.sessionId);
@@ -1719,8 +1757,11 @@ function shutdown(reason) {
 
   // Only close HTTP server if we own it
   if (isHttpServerOwner) {
-    // Remove own session from registry
-    sessionRegistry.delete(SESSION_ID);
+    // Remove own session from registry only if we still own it
+    const ownSession = sessionRegistry.get(SESSION_ID);
+    if (ownSession && ownSession.processId === PROCESS_ID) {
+      sessionRegistry.delete(SESSION_ID);
+    }
 
     // Close all WebSocket connections
     for (const client of connectedClients) {
@@ -1831,6 +1872,7 @@ async function main() {
     // Owner registers directly
     sessionRegistry.set(SESSION_ID, {
       sessionId: SESSION_ID,
+      processId: PROCESS_ID,
       projectDir: PROJECT_DIR,
       projectUrl: detected.url,
       detectedFrom: detected.detectedFrom,

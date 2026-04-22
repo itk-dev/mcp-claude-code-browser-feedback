@@ -1,5 +1,19 @@
 import fs from "fs";
 import path from "path";
+import crypto from "node:crypto";
+
+// Derive a deterministic session ID (UUID format) from the project directory.
+// Ensures reconnecting the same project reuses the same session ID.
+export function deriveSessionId(projectDir) {
+  const hash = crypto.createHash('sha256').update(projectDir).digest('hex');
+  return [
+    hash.slice(0, 8),
+    hash.slice(8, 12),
+    hash.slice(12, 16),
+    hash.slice(16, 20),
+    hash.slice(20, 32),
+  ].join('-');
+}
 
 // UUID format validation for session IDs
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
