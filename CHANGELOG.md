@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-22
+
 ### Fixed
 
 - Fix browser extension losing connection and feedback after MCP reconnect (`/mcp`) — session IDs are now derived deterministically from the project directory, so reconnecting preserves WebSocket connections and pending feedback (#43)
