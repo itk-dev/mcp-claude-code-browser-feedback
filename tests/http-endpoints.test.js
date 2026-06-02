@@ -177,6 +177,106 @@ describe('session registration', () => {
 });
 
 // ============================================
+// Proxy Re-registration (heartbeat + reactive)
+// ============================================
+
+describe('proxy re-registration', () => {
+  it('GET /feedback for a valid but unknown session returns the unknownSession marker', async () => {
+    const unknownId = crypto.randomUUID();
+    const resp = await fetch(`${BASE_URL}/feedback?session=${unknownId}`);
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.unknownSession).toBe(true);
+    // Must not masquerade as a normal empty response.
+    expect(data.feedback).toBeUndefined();
+  });
+
+  it('GET /pending-summary for a valid but unknown session returns the unknownSession marker', async () => {
+    const unknownId = crypto.randomUUID();
+    const resp = await fetch(`${BASE_URL}/pending-summary?session=${unknownId}`);
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.unknownSession).toBe(true);
+  });
+
+  it('does not flag the unmatched bucket or a registered session as unknown', async () => {
+    // unmatched bucket -> normal empty response
+    const unmatched = await (await fetch(`${BASE_URL}/feedback`)).json();
+    expect(unmatched.unknownSession).toBeUndefined();
+    expect(Array.isArray(unmatched.feedback)).toBe(true);
+
+    // a registered session -> normal response
+    const sessionId = crypto.randomUUID();
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, projectDir: '/tmp/known' }),
+    });
+    const known = await (await fetch(`${BASE_URL}/feedback?session=${sessionId}`)).json();
+    expect(known.unknownSession).toBeUndefined();
+    expect(Array.isArray(known.feedback)).toBe(true);
+
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+  });
+
+  it('re-registering the same session is idempotent (one entry, refreshed timestamp)', async () => {
+    const sessionId = crypto.randomUUID();
+    const body = { sessionId, projectDir: '/tmp/heartbeat', projectUrl: 'https://hb.local' };
+
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const first = (await (await fetch(`${BASE_URL}/sessions`)).json())
+      .sessions.find(s => s.sessionId === sessionId);
+
+    await new Promise(r => setTimeout(r, 10));
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const all = (await (await fetch(`${BASE_URL}/sessions`)).json())
+      .sessions.filter(s => s.sessionId === sessionId);
+
+    expect(all).toHaveLength(1);
+    expect(new Date(all[0].registeredAt).getTime())
+      .toBeGreaterThanOrEqual(new Date(first.registeredAt).getTime());
+
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }),
+    });
+  });
+
+  it('re-registering after eviction restores visibility in /sessions', async () => {
+    const sessionId = crypto.randomUUID();
+    const body = { sessionId, projectDir: '/tmp/restore' };
+
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    // Evict (simulates a proxy that registered with a now-gone owner).
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }),
+    });
+    let sessions = (await (await fetch(`${BASE_URL}/sessions`)).json()).sessions;
+    expect(sessions.find(s => s.sessionId === sessionId)).toBeUndefined();
+
+    // Reactive/heartbeat re-registration brings it back.
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    sessions = (await (await fetch(`${BASE_URL}/sessions`)).json()).sessions;
+    expect(sessions.find(s => s.sessionId === sessionId)).toBeDefined();
+
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }),
+    });
+  });
+});
+
+// ============================================
 // Session-Scoped Data Isolation
 // ============================================
 
@@ -190,12 +290,22 @@ describe('session-scoped data isolation', () => {
     expect(data.pendingFeedback).toBe(0);
   });
 
-  it('GET /feedback?session=<id> returns empty for unknown session', async () => {
-    const unknownId = crypto.randomUUID();
-    const resp = await fetch(`${BASE_URL}/feedback?session=${unknownId}`);
+  it('GET /feedback?session=<id> returns empty for a registered session with no feedback', async () => {
+    const sessionId = crypto.randomUUID();
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, projectDir: '/tmp/empty-feedback' }),
+    });
+    const resp = await fetch(`${BASE_URL}/feedback?session=${sessionId}`);
     expect(resp.status).toBe(200);
     const data = await resp.json();
     expect(data.feedback).toEqual([]);
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
   });
 
   it('DELETE /feedback/<id>?session=<id> returns 404 for non-existent item', async () => {
@@ -459,8 +569,19 @@ describe('orphan bucket reporting', () => {
   });
 
   it('GET /feedback exposes orphans field', async () => {
-    const resp = await fetch(`${BASE_URL}/feedback?session=${crypto.randomUUID()}`);
+    const sessionId = crypto.randomUUID();
+    await fetch(`${BASE_URL}/register-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, projectDir: '/tmp/orphans-field' }),
+    });
+    const resp = await fetch(`${BASE_URL}/feedback?session=${sessionId}`);
     const data = await resp.json();
     expect(Array.isArray(data.orphans)).toBe(true);
+    await fetch(`${BASE_URL}/unregister-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
   });
 });
