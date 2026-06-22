@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Proxy MCP sessions now stay registered with whichever process currently owns the HTTP server. Previously a proxy registered only once at startup, so when the port owner changed (the original owner stopped listening and a later process took over the port) the proxy became invisible in `/sessions` — causing the browser extension to route every tab to the single surviving session. Proxies now re-register on a 30s heartbeat and immediately re-register and retry when a request reveals the owner doesn't recognize the session.
+
 ## [0.7.0] - 2026-05-12
 
 ### Fixed

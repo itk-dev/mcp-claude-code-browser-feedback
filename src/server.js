@@ -39,6 +39,11 @@ const connectedClientsBySession = new Map();  // sessionId -> Set<WebSocket>
 let connectedClients = new Set();             // All clients (for total count in /status)
 let isHttpServerOwner = false; // Track if this instance owns the HTTP server
 
+// How often a proxy session re-registers with the owner. Keeps the session
+// visible after an owner change even if no MCP tool is invoked in between.
+const HEARTBEAT_MS = 30_000;
+let heartbeatTimer = null;
+
 // Session-partitioned data accessors. The owner process persists pending+ready
 // queues to disk via storage.js so feedback survives crashes and restarts.
 function persistSession(sid) {
@@ -77,6 +82,15 @@ function getSessionClients(sid) {
 // are the symptom of issue #46: a stale widget filed feedback under a session
 // ID that nobody is listening for. Used to surface (and optionally auto-rescue)
 // the data via the MCP tools.
+// True when a request names a valid session UUID that the owner doesn't know
+// about — e.g. a proxy that registered with a previous owner before this
+// process took over the port. The proxy uses this signal to re-register and
+// retry. The 'unmatched' bucket and omitted/invalid IDs are not treated as
+// unknown proxy sessions.
+function isUnknownProxySession(sessionId) {
+  return isValidSessionId(sessionId) && !sessionRegistry.has(sessionId);
+}
+
 function findOrphanBuckets() {
   const orphans = [];
   const seen = new Set();
@@ -158,11 +172,16 @@ async function fetchServerStatus(sessionId) {
 }
 
 // Helper to fetch ready feedback from the running HTTP server
-async function fetchReadyFeedback(clear = true) {
+async function fetchReadyFeedback(clear = true, _retried = false) {
   try {
     const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}&session=${SESSION_ID}`);
     if (response.ok) {
-      return await response.json();
+      const data = await response.json();
+      if (data && data.unknownSession && !_retried) {
+        await ensureRegistered();
+        return fetchReadyFeedback(clear, true);
+      }
+      return data;
     }
   } catch (err) {
     // Server not running or not reachable
@@ -187,7 +206,7 @@ async function pollForFeedback(timeoutSeconds) {
 }
 
 // Helper to broadcast message via the running HTTP server
-async function broadcastViaHttp(message) {
+async function broadcastViaHttp(message, _retried = false) {
   try {
     const response = await fetch(`http://localhost:${PORT}/broadcast?session=${SESSION_ID}`, {
       method: 'POST',
@@ -195,7 +214,12 @@ async function broadcastViaHttp(message) {
       body: JSON.stringify(message),
     });
     if (response.ok) {
-      return await response.json();
+      const data = await response.json();
+      if (data && data.unknownSession && !_retried) {
+        await ensureRegistered();
+        return broadcastViaHttp(message, true);
+      }
+      return data;
     }
   } catch (err) {
     // Server not running or not reachable
@@ -204,11 +228,16 @@ async function broadcastViaHttp(message) {
 }
 
 // Helper to fetch pending summary from the running HTTP server
-async function fetchPendingSummary() {
+async function fetchPendingSummary(_retried = false) {
   try {
     const response = await fetch(`http://localhost:${PORT}/pending-summary?session=${SESSION_ID}`);
     if (response.ok) {
-      return await response.json();
+      const data = await response.json();
+      if (data && data.unknownSession && !_retried) {
+        await ensureRegistered();
+        return fetchPendingSummary(true);
+      }
+      return data;
     }
   } catch (err) {
     // Server not running or not reachable
@@ -249,6 +278,14 @@ async function registerSessionViaHttp() {
   } catch (err) {
     // Server not reachable, session won't appear in registry
   }
+}
+
+// Re-register this proxy session with the current owner. Idempotent and
+// network-error-safe. Called periodically (heartbeat) and reactively when a
+// proxied request reveals the owner doesn't recognize this session — e.g.
+// after the port owner changed since startup.
+async function ensureRegistered() {
+  await registerSessionViaHttp();
 }
 
 // Helper to unregister this session from the owner server
@@ -354,6 +391,13 @@ const httpServer = http.createServer((req, res) => {
   if (urlObj.pathname === "/feedback" && req.method === "GET") {
     const shouldClear = urlObj.searchParams.get("clear") !== "false";
     const sessionId = urlObj.searchParams.get("session") || "unmatched";
+    // If a proxy asks for a valid session ID we no longer know about (e.g. it
+    // registered with a previous owner), tell it so it can re-register and retry.
+    if (isUnknownProxySession(sessionId)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ unknownSession: true }));
+      return;
+    }
     const sessionReady = getSessionReady(sessionId);
     let feedback = [...sessionReady];
     if (shouldClear) {
@@ -386,6 +430,11 @@ const httpServer = http.createServer((req, res) => {
   // GET /pending-summary - get summary of pending feedback without full payloads
   if (urlObj.pathname === "/pending-summary" && req.method === "GET") {
     const sessionId = urlObj.searchParams.get("session") || "unmatched";
+    if (isUnknownProxySession(sessionId)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ unknownSession: true }));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(getPendingSummary(getSessionPending(sessionId))));
     return;
@@ -416,6 +465,11 @@ const httpServer = http.createServer((req, res) => {
   // POST /broadcast - broadcast message to connected clients (used by secondary MCP instances)
   if (urlObj.pathname === "/broadcast" && req.method === "POST") {
     const sessionId = urlObj.searchParams.get("session") || "unmatched";
+    if (isUnknownProxySession(sessionId)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ unknownSession: true }));
+      return;
+    }
     parseJsonBody(req).then((message) => {
       const data = JSON.stringify(message);
       let sentCount = 0;
@@ -1956,7 +2010,11 @@ function shutdown(reason) {
       process.exit(0);
     }, 2000);
   } else {
-    // Unregister from owner server before exit
+    // Stop the re-registration heartbeat, then unregister before exit
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     unregisterSessionViaHttp().finally(() => {
       process.exit(0);
     });
@@ -2061,8 +2119,11 @@ async function main() {
     });
     console.error(`[browser-feedback-mcp] Session: ${SESSION_ID}`);
   } else {
-    // Proxy registers via HTTP
+    // Proxy registers via HTTP, then keeps itself registered with a heartbeat
+    // so it stays visible if the owner process changes after startup.
     await registerSessionViaHttp();
+    heartbeatTimer = setInterval(ensureRegistered, HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
     console.error(`[browser-feedback-mcp] Session registered: ${SESSION_ID}`);
   }
 }
