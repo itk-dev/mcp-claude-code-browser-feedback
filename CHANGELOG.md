@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-08
+
 ### Deprecated
 
 - The script-injection install path — `install_widget`, `uninstall_widget`, `get_widget_snippet` and the manual `<script>` tag workflow — is deprecated in favor of the browser extension (`setup_extension`). The tools remain functional but log a deprecation notice; removal is planned for the next major release (#48).
