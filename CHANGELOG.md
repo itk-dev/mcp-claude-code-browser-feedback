@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The `session_invalid` WebSocket message no longer lists registered session IDs, closing a session-enumeration vector for clients connecting with an unknown session (#50).
+
 ### Added
 
 - Element selection now descends into same-origin iframes (including nested ones), so individual elements inside an iframe can be annotated instead of the whole frame. Feedback for such elements includes the frame's URL and selector. Cross-origin iframes still fall back to selecting the iframe itself.
