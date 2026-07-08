@@ -210,22 +210,32 @@ async function fetchServerStatus(sessionId) {
   return null;
 }
 
-// Helper to fetch ready feedback from the running HTTP server
-async function fetchReadyFeedback(clear = true, _retried = false) {
-  try {
-    const response = await fetch(`http://localhost:${PORT}/feedback?clear=${clear}&session=${SESSION_ID}`);
-    if (response.ok) {
+// Fetch JSON from the owner HTTP server. If the owner reports it doesn't
+// recognize this session (unknownSession) — e.g. the port owner changed since
+// startup — re-register once and retry. Returns null on any network error or
+// non-OK response.
+async function ownerFetch(path, opts = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`http://localhost:${PORT}${path}`, opts);
+      if (!response.ok) return null;
       const data = await response.json();
-      if (data && data.unknownSession && !_retried) {
-        await ensureRegistered();
-        return fetchReadyFeedback(clear, true);
+      if (data && data.unknownSession && attempt === 0) {
+        await registerSessionViaHttp();
+        continue; // retry once with a fresh registration
       }
       return data;
+    } catch (err) {
+      // Server not running or not reachable
+      return null;
     }
-  } catch (err) {
-    // Server not running or not reachable
   }
   return null;
+}
+
+// Helper to fetch ready feedback from the running HTTP server
+async function fetchReadyFeedback(clear = true) {
+  return ownerFetch(`/feedback?clear=${clear}&session=${SESSION_ID}`);
 }
 
 // Helper to poll for feedback from the running HTTP server
@@ -245,43 +255,17 @@ async function pollForFeedback(timeoutSeconds) {
 }
 
 // Helper to broadcast message via the running HTTP server
-async function broadcastViaHttp(message, _retried = false) {
-  try {
-    const response = await fetch(`http://localhost:${PORT}/broadcast?session=${SESSION_ID}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    });
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.unknownSession && !_retried) {
-        await ensureRegistered();
-        return broadcastViaHttp(message, true);
-      }
-      return data;
-    }
-  } catch (err) {
-    // Server not running or not reachable
-  }
-  return null;
+async function broadcastViaHttp(message) {
+  return ownerFetch(`/broadcast?session=${SESSION_ID}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message),
+  });
 }
 
 // Helper to fetch pending summary from the running HTTP server
-async function fetchPendingSummary(_retried = false) {
-  try {
-    const response = await fetch(`http://localhost:${PORT}/pending-summary?session=${SESSION_ID}`);
-    if (response.ok) {
-      const data = await response.json();
-      if (data && data.unknownSession && !_retried) {
-        await ensureRegistered();
-        return fetchPendingSummary(true);
-      }
-      return data;
-    }
-  } catch (err) {
-    // Server not running or not reachable
-  }
-  return null;
+async function fetchPendingSummary() {
+  return ownerFetch(`/pending-summary?session=${SESSION_ID}`);
 }
 
 // Helper to delete feedback via the running HTTP server
@@ -299,7 +283,10 @@ async function deleteFeedbackViaHttp(id) {
   return null;
 }
 
-// Helper to register this session with the owner server
+// Register (or re-register) this proxy session with the current owner.
+// Idempotent and network-error-safe. Called at startup, periodically
+// (heartbeat), and reactively when a proxied request reveals the owner doesn't
+// recognize this session — e.g. after the port owner changed since startup.
 async function registerSessionViaHttp() {
   const detected = detectProjectUrl(PROJECT_DIR);
   try {
@@ -317,14 +304,6 @@ async function registerSessionViaHttp() {
   } catch (err) {
     // Server not reachable, session won't appear in registry
   }
-}
-
-// Re-register this proxy session with the current owner. Idempotent and
-// network-error-safe. Called periodically (heartbeat) and reactively when a
-// proxied request reveals the owner doesn't recognize this session — e.g.
-// after the port owner changed since startup.
-async function ensureRegistered() {
-  await registerSessionViaHttp();
 }
 
 // Helper to unregister this session from the owner server
@@ -2120,7 +2099,7 @@ async function main() {
     // Proxy registers via HTTP, then keeps itself registered with a heartbeat
     // so it stays visible if the owner process changes after startup.
     await registerSessionViaHttp();
-    heartbeatTimer = setInterval(ensureRegistered, HEARTBEAT_MS);
+    heartbeatTimer = setInterval(registerSessionViaHttp, HEARTBEAT_MS);
     heartbeatTimer.unref?.();
     console.error(`[browser-feedback-mcp] Session registered: ${SESSION_ID}`);
   }

@@ -59,7 +59,6 @@
   let isAnnotationMode = false;
   let selectedElement = null;
   let consoleLogs = [];
-  let networkErrors = [];
   let pendingItems = [];
   let localPendingItems = [];  // Client-side storage for offline mode
   let isPendingQueueOpen = false;
@@ -1342,16 +1341,17 @@
       }
     } else if (message.type === 'request_annotation') {
       // Claude is asking for annotation
-      showNotification(message.message || 'Claude is requesting your feedback');
+      console.log('[Claude Feedback]', message.message || 'Claude is requesting your feedback');
       startAnnotationMode();
     } else if (message.type === 'request_multiple_annotations') {
       // Claude wants multiple annotations - just start annotation mode
-      showNotification(message.message || 'Claude is requesting multiple annotations');
+      console.log('[Claude Feedback]', message.message || 'Claude is requesting multiple annotations');
       startAnnotationMode();
     } else if (message.type === 'feedback_received') {
-      showItemAdded();
+      showSuccess('Item added');
     } else if (message.type === 'sent_to_claude') {
-      showBatchSuccess(message.count);
+      const count = message.count;
+      showSuccess(`${count} item${count !== 1 ? 's' : ''} sent to Claude!`);
     }
   }
 
@@ -1907,14 +1907,6 @@
     }
   }
 
-  function showItemAdded() {
-    showSuccess('Item added');
-  }
-
-  function showBatchSuccess(count) {
-    showSuccess(`${count} item${count !== 1 ? 's' : ''} sent to Claude!`);
-  }
-
   function showError(message) {
     const el = getEl(`${WIDGET_ID}-error`);
     if (el) {
@@ -1927,10 +1919,6 @@
       // Fallback to console if element doesn't exist
       console.error('[Claude Feedback]', message);
     }
-  }
-
-  function showNotification(message) {
-    console.log('[Claude Feedback]', message);
   }
 
   // Visible banner shown when the server tells us our session ID is stale and
@@ -2071,7 +2059,6 @@
     delete window.__claudeFeedbackDestroy;
 
     consoleLogs = [];
-    networkErrors = [];
     pendingItems = [];
     localPendingItems = [];
     selectedElement = null;
