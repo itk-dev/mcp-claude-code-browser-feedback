@@ -82,6 +82,7 @@ const FRAME_HTML = `<!doctype html>
 <body style="margin:0">
 <p style="height:40px;margin:0">Inside iframe</p>
 <button id="inner-btn" style="position:absolute; top:60px; left:20px; width:120px; height:30px">Click me</button>
+<input id="inner-input" style="position:absolute; top:95px; left:20px; width:120px; height:20px" />
 <iframe id="nested-frame" src="/nested.html"
   style="position:absolute; top:120px; left:20px; width:250px; height:140px; border:2px solid #08c"></iframe>
 </body></html>`;
@@ -301,7 +302,46 @@ await page.waitForTimeout(100);
 const tt3 = await tooltipText();
 check('cross-origin iframe falls back to iframe element', tt3.includes('#cross-origin-frame'), `tooltip="${tt3}"`);
 await page.keyboard.press('Escape');
+await page.waitForTimeout(100);
 
+// ---- Keyboard shortcuts while focus is inside a same-origin iframe (#55) ----
+// These drive the keyboard entirely through the iframe document — no widget
+// button click — so focus stays in the frame and the event must reach the
+// mirrored keydown listener. Without the fix, Shift+C/Escape would be dead here.
+const sameOriginFrame = page.frameLocator('#same-origin-frame');
+
+// Shift+C from inside the frame starts annotation mode
+await sameOriginFrame.locator('#inner-btn').focus();
+check('annotation mode off before frame-Shift+C', !(await overlayActive()));
+await page.keyboard.press('Shift+C'); // keydown originates in the iframe document
+await page.waitForTimeout(100);
+check('Shift+C from inside iframe starts annotation mode', await overlayActive());
+if (await overlayActive()) {
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(100);
+}
+
+// Escape from inside the frame cancels annotation mode. Start via the widget
+// button (works regardless of the fix), then move focus into the frame so the
+// Escape keydown must travel through the mirrored iframe listener — decoupled
+// from the Shift+C check above so it can't trivially pass on an inactive overlay.
+await startAnnotation();
+check('annotation mode active before frame-Escape', await overlayActive());
+await sameOriginFrame.locator('#inner-btn').focus();
+await page.keyboard.press('Escape');
+await page.waitForTimeout(100);
+check('Escape from inside iframe cancels annotation mode', !(await overlayActive()));
+
+// Shift+C is suppressed while typing in an iframe input
+await sameOriginFrame.locator('#inner-input').focus();
+await page.keyboard.press('Shift+C');
+await page.waitForTimeout(100);
+check('Shift+C suppressed while typing in iframe input', !(await overlayActive()));
+if (await overlayActive()) await page.keyboard.press('Escape');
+
+// Cross-origin frame skipped gracefully — covered by the no-errors check below
+// (the sync helper walks it and must not throw). Return focus to the top page.
+await page.locator('h1').click();
 check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
 
 // ---------------------------------------------------------------------------

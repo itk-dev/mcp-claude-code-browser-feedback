@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Widget keyboard shortcuts (Escape to cancel, Shift+C to start annotation) now work when focus is inside a same-origin iframe. The handler is mirrored onto reachable same-origin frame documents; cross-origin frames are skipped (#55).
+
 ## [0.8.0] - 2026-07-08
 
 ### Deprecated
