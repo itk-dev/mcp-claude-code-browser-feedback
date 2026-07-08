@@ -940,11 +940,13 @@
         break;
       }
       if (!doc) break;
+      // Translate the point into this frame's coordinate space before
+      // descending — rects on nested iframes are relative to their parent
+      // frame's viewport, not the top window.
       const rect = el.getBoundingClientRect();
-      const inner = doc.elementFromPoint(
-        x - rect.left - el.clientLeft,
-        y - rect.top - el.clientTop
-      );
+      x -= rect.left + el.clientLeft;
+      y -= rect.top + el.clientTop;
+      const inner = doc.elementFromPoint(x, y);
       if (!inner) break;
       el = inner;
     }
@@ -958,6 +960,8 @@
     let top = rect.top;
     let left = rect.left;
     let win = el.ownerDocument?.defaultView;
+    // Unlike getHostFrame, frameElement can't throw here: holding an element
+    // reference means every window on the chain up to ours is same-origin.
     while (win && win !== window && win.frameElement) {
       const frame = win.frameElement;
       const frameRect = frame.getBoundingClientRect();
@@ -984,11 +988,16 @@
     const rect = getScreenRect(el);
     const styles = (el.ownerDocument?.defaultView || window).getComputedStyle(el);
 
-    const hostFrame = getHostFrame(el);
-    const frame = hostFrame
+    // Walk the host-frame chain so the selector resolves from the top
+    // document even for nested iframes, e.g. "#outer-frame >>> #inner-frame".
+    const frameParts = [];
+    for (let f = getHostFrame(el); f; f = getHostFrame(f)) {
+      frameParts.unshift(getFullSelector(f));
+    }
+    const frame = frameParts.length
       ? {
           url: el.ownerDocument.location?.href || null,
-          selector: getFullSelector(hostFrame),
+          selector: frameParts.join(' >>> '),
         }
       : null;
 

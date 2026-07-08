@@ -13,6 +13,7 @@ npm install    # Install dependencies
 npm start      # Run the MCP server (node src/server.js)
 npm test       # Run tests (vitest)
 npm run test:watch  # Run tests in watch mode
+npm run test:e2e    # Widget e2e test in headless Chromium (tests/e2e/widget.e2e.mjs)
 ```
 
 ## Architecture

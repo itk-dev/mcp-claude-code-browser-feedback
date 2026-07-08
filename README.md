@@ -276,6 +276,19 @@ FEEDBACK_PORT=9878 node src/server.js
 - All communication stays on your machine
 - **Note:** The HTTP/WebSocket server listens on all interfaces (`0.0.0.0`) by default. If you need to restrict this, use a firewall or bind to a specific interface via a reverse proxy.
 
+## Development
+
+```bash
+npm test          # Unit tests (vitest)
+npm run test:e2e  # Widget end-to-end test (requires a Playwright Chromium)
+```
+
+The e2e test drives the widget in a headless browser to cover annotation-mode
+behavior the unit suite can't reach (iframe selection, Escape handling,
+shadow DOM focus). It looks for a Chromium in the Playwright browser cache;
+run `npx playwright install chromium` once, or point `PLAYWRIGHT_CHROMIUM`
+at a browser executable.
+
 ## License
 
 MIT
