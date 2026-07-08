@@ -460,7 +460,8 @@ describe('WebSocket session routing', () => {
       try {
         expect(msg.type).toBe('session_invalid');
         expect(msg.providedSession).toBe(staleId);
-        expect(msg.knownSessions).toEqual(expect.arrayContaining([sessionA, sessionB]));
+        // Registered session IDs must not be enumerable by unknown clients (#50)
+        expect(msg.knownSessions).toBeUndefined();
       } finally {
         ws.close();
       }

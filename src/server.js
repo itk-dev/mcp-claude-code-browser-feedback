@@ -132,6 +132,45 @@ function migrateOrphanInto(targetSid, orphanSid) {
   persistSession(targetSid);
 }
 
+// Drain the session's ready feedback; when empty, fold in orphan buckets if
+// it's safe (exactly one registered session — with deterministic IDs there
+// can only be one MCP session per projectDir), otherwise report them.
+// Returns { feedback, orphans } — orphans is non-empty only when rescue
+// wasn't safe. Shared by the HTTP /feedback handler and the owner branch of
+// get_pending_feedback (Layer 4 of #46).
+function consumeReadyWithOrphanRescue(sessionId, shouldClear) {
+  let feedback = [...getSessionReady(sessionId)];
+  if (shouldClear) {
+    setSessionReady(sessionId, []);
+  }
+
+  let orphans = [];
+  if (feedback.length === 0 && isValidSessionId(sessionId) && sessionRegistry.has(sessionId)) {
+    orphans = findOrphanBuckets();
+    if (orphans.length > 0 && sessionRegistry.size === 1) {
+      for (const o of orphans) {
+        console.error(`[browser-feedback-mcp] Rescuing orphan bucket ${o.sessionId} into ${sessionId} (${o.pendingCount} pending, ${o.readyCount} ready)`);
+        migrateOrphanInto(sessionId, o.sessionId);
+      }
+      feedback = [...getSessionReady(sessionId), ...getSessionPending(sessionId)];
+      if (shouldClear) {
+        setSessionReady(sessionId, []);
+        setSessionPending(sessionId, []);
+      }
+      orphans = []; // consumed
+    }
+  }
+  return { feedback, orphans };
+}
+
+// Message shown by get_pending_feedback when orphan buckets exist but
+// auto-rescue isn't safe. Kept in one place so the owner and proxy branches
+// can't drift apart.
+function formatOrphanHintText(orphans) {
+  const hint = orphans.map(o => `  - ${o.sessionId} (${o.pendingCount} pending, ${o.readyCount} ready, ${o.clientCount} client(s))`).join('\n');
+  return `No pending feedback for this session.\n\nHowever, ${orphans.length} orphan bucket(s) hold feedback under session IDs not tied to any MCP session (likely a stale widget cache — see #46):\n${hint}\n\nReload the browser tab so the widget rebinds to the current session, then try again.`;
+}
+
 // Helper to parse JSON body from an HTTP request
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -398,30 +437,7 @@ const httpServer = http.createServer((req, res) => {
       res.end(JSON.stringify({ unknownSession: true }));
       return;
     }
-    const sessionReady = getSessionReady(sessionId);
-    let feedback = [...sessionReady];
-    if (shouldClear) {
-      setSessionReady(sessionId, []);
-    }
-    // Same orphan rescue logic as get_pending_feedback (Layer 4 of #46).
-    let orphans = [];
-    if (feedback.length === 0 && isValidSessionId(sessionId) && sessionRegistry.has(sessionId)) {
-      orphans = findOrphanBuckets();
-      if (orphans.length > 0 && sessionRegistry.size === 1) {
-        for (const o of orphans) {
-          console.error(`[browser-feedback-mcp] /feedback rescuing orphan ${o.sessionId} into ${sessionId}`);
-          migrateOrphanInto(sessionId, o.sessionId);
-        }
-        const rescuedReady = getSessionReady(sessionId);
-        const rescuedPending = getSessionPending(sessionId);
-        feedback = [...rescuedReady, ...rescuedPending];
-        if (shouldClear) {
-          setSessionReady(sessionId, []);
-          setSessionPending(sessionId, []);
-        }
-        orphans = []; // consumed
-      }
-    }
+    const { feedback, orphans } = consumeReadyWithOrphanRescue(sessionId, shouldClear);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ feedback, orphans }));
     return;
@@ -621,10 +637,12 @@ wss.on("connection", (ws, req) => {
       // Ambiguous — don't guess. Tell the widget so it can refresh.
       console.error(`[browser-feedback-mcp] WS client connected with unknown session ${rawSession}; ${registered.length} sessions registered. Sending session_invalid.`);
       try {
+        // Deliberately no list of registered session IDs here — that would
+        // hand a session-enumeration primitive to any client that can reach
+        // the socket (#50).
         ws.send(JSON.stringify({
           type: 'session_invalid',
           providedSession: rawSession,
-          knownSessions: registered,
           reason: 'Session ID not recognized. Reload the page to fetch the current widget.',
         }));
       } catch (_) { /* ignore */ }
@@ -1344,12 +1362,11 @@ The widget only loads in development (localhost) by default.
           if (result.feedback.length === 0) {
             const orphans = Array.isArray(result.orphans) ? result.orphans : [];
             if (orphans.length > 0) {
-              const hint = orphans.map(o => `  - ${o.sessionId} (${o.pendingCount} pending, ${o.readyCount} ready, ${o.clientCount} client(s))`).join('\n');
               return {
                 content: [
                   {
                     type: "text",
-                    text: `No pending feedback for this session.\n\nHowever, ${orphans.length} orphan bucket(s) hold feedback under session IDs not tied to any MCP session (likely a stale widget cache — see #46):\n${hint}\n\nReload the browser tab so the widget rebinds to the current session, then try again.`,
+                    text: formatOrphanHintText(orphans),
                   },
                 ],
               };
@@ -1378,58 +1395,30 @@ The widget only loads in development (localhost) by default.
         }
       }
 
-      const sessionReady = getSessionReady(SESSION_ID);
-      let feedback = [...sessionReady];
-      if (shouldClear) {
-        setSessionReady(SESSION_ID, []);
-      }
+      const { feedback, orphans } = consumeReadyWithOrphanRescue(SESSION_ID, shouldClear);
 
-      // If our own bucket is empty but a stale widget filed feedback under an
-      // unknown session ID, recover it. With deterministic IDs there can only
-      // be one MCP session per projectDir, so when exactly one is registered
-      // it's safe to fold the orphan bucket into ours. Otherwise just report.
-      if (feedback.length === 0) {
-        const orphans = findOrphanBuckets();
-        if (orphans.length > 0) {
-          if (sessionRegistry.size === 1) {
-            for (const o of orphans) {
-              console.error(`[browser-feedback-mcp] Rescuing orphan bucket ${o.sessionId} into ${SESSION_ID} (${o.pendingCount} pending, ${o.readyCount} ready)`);
-              migrateOrphanInto(SESSION_ID, o.sessionId);
-            }
-            const rescuedReady = getSessionReady(SESSION_ID);
-            const rescuedPending = getSessionPending(SESSION_ID);
-            feedback = [...rescuedReady, ...rescuedPending];
-            if (shouldClear) {
-              setSessionReady(SESSION_ID, []);
-              setSessionPending(SESSION_ID, []);
-            }
-            if (feedback.length > 0) {
-              return { content: formatFeedbackAsContent(feedback) };
-            }
-          } else {
-            const hint = orphans.map(o => `  - ${o.sessionId} (${o.pendingCount} pending, ${o.readyCount} ready, ${o.clientCount} client(s))`).join('\n');
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `No pending feedback for this session.\n\nHowever, ${orphans.length} orphan bucket(s) hold feedback under session IDs not tied to any MCP session (likely a stale widget cache — see #46):\n${hint}\n\nReload the browser tab so the widget rebinds to the current session, then try again.`,
-                },
-              ],
-            };
-          }
-        }
+      if (feedback.length > 0) {
+        return {
+          content: formatFeedbackAsContent(feedback),
+        };
+      }
+      if (orphans.length > 0) {
         return {
           content: [
             {
               type: "text",
-              text: "No pending feedback.",
+              text: formatOrphanHintText(orphans),
             },
           ],
         };
       }
-
       return {
-        content: formatFeedbackAsContent(feedback),
+        content: [
+          {
+            type: "text",
+            text: "No pending feedback.",
+          },
+        ],
       };
     }
 
