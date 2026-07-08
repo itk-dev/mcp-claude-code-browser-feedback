@@ -79,6 +79,10 @@
   let _selfHealObserver = null;
   let _selfHealInterval = null;
   let _wsReconnectTimeout = null;
+  // Same-origin iframe documents we've mirrored the keydown handler onto (#55).
+  // WeakSet for idempotent attach; parallel Set so destroy() can iterate to detach.
+  const _iframeKeydownDocs = new WeakSet();
+  const _iframeKeydownDocsList = new Set();
 
   // ============================================
   // Console Log Capture
@@ -1586,11 +1590,14 @@
         const panel = getEl(`${WIDGET_ID}-panel`);
         if (panel && panel.classList.contains('active')) return;
 
-        // Don't trigger when typing in input fields (including inside Shadow DOM)
+        // Don't trigger when typing in input fields (including inside Shadow DOM
+        // or an iframe). For iframe-origin events document.activeElement is the
+        // <iframe> element, so also inspect the real target inside the frame.
         const active = document.activeElement;
         const deepActive = active?.shadowRoot?.activeElement || active;
-        const isInputFocused = ['INPUT', 'TEXTAREA'].includes(deepActive.tagName)
-          || deepActive.isContentEditable;
+        const isInputEl = (el) => !!el
+          && (['INPUT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable);
+        const isInputFocused = isInputEl(deepActive) || isInputEl(e.target);
 
         if (!isInputFocused && !isAnnotationMode) {
           e.preventDefault();
@@ -1615,6 +1622,12 @@
     _listeners.onShadowRootKeydown = onShadowRootKeydown;
     shadowRoot.addEventListener('keydown', onShadowRootKeydown);
 
+    // Mirror the top-document keydown handler onto same-origin iframes so
+    // Escape/Shift+C work when focus sits inside a frame (#55). Called again in
+    // startAnnotationMode() to pick up frames added after load; we intentionally
+    // don't run a persistent observer for dynamically-added iframes.
+    syncIframeKeydownListeners();
+
     // Cmd/Ctrl+Enter to send feedback from description textarea
     const descriptionTextarea = getEl(`${WIDGET_ID}-description`);
     descriptionTextarea.addEventListener('keydown', (e) => {
@@ -1631,8 +1644,41 @@
     sendBtn.addEventListener('click', addItem);
   }
 
+  // Keyboard events don't cross document boundaries, so mirror the top-document
+  // keydown handler onto every reachable same-origin iframe. Cross-origin frames
+  // throw on contentDocument access and are skipped (their shortcuts can't work).
+  // Idempotent — safe to call repeatedly.
+  function syncIframeKeydownListeners() {
+    const handler = _listeners.onDocumentKeydown;
+    if (!handler) return;
+    for (const frame of document.querySelectorAll('iframe')) {
+      let doc;
+      try {
+        doc = frame.contentDocument;
+      } catch {
+        continue; // cross-origin
+      }
+      if (!doc || _iframeKeydownDocs.has(doc)) continue;
+      doc.addEventListener('keydown', handler);
+      _iframeKeydownDocs.add(doc);
+      _iframeKeydownDocsList.add(doc);
+      // Forget the frame when it navigates/unloads so a re-navigated same-origin
+      // frame gets a fresh listener on the next sync.
+      try {
+        doc.defaultView?.addEventListener('unload', () => {
+          _iframeKeydownDocs.delete(doc);
+          _iframeKeydownDocsList.delete(doc);
+        }, { once: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   function startAnnotationMode() {
     isAnnotationMode = true;
+    // Frames may have been added since load (SPA); ensure they can hear Escape.
+    syncIframeKeydownListeners();
     getEl(`${WIDGET_ID}-overlay`).classList.add('active');
     getEl(`${WIDGET_ID}-instructions`).classList.add('active');
   }
@@ -1996,6 +2042,17 @@
     if (_listeners.onWindowResize) {
       window.removeEventListener('resize', _listeners.onWindowResize);
     }
+    // Detach keydown listeners mirrored onto same-origin iframes (#55)
+    if (_listeners.onDocumentKeydown) {
+      for (const doc of _iframeKeydownDocsList) {
+        try {
+          doc.removeEventListener('keydown', _listeners.onDocumentKeydown);
+        } catch {
+          /* frame may be gone */
+        }
+      }
+    }
+    _iframeKeydownDocsList.clear();
     window.removeEventListener('error', onWindowError);
     _listeners = {};
 
