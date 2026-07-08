@@ -8,7 +8,7 @@ A Model Context Protocol (MCP) server that enables visual browser feedback colle
 ┌─────────────────────────────────────────────────────────────────┐
 │  Your Web App (localhost:3000)                                  │
 │                                                                 │
-│  [Widget auto-injected by Claude]                               │
+│  [Widget delivered by browser extension]                        │
 │                                                                 │
 │                                        ┌──────────────────┐     │
 │       Your App UI                      │ Add annotation   │     │
@@ -65,23 +65,43 @@ Or add manually to your Claude Code MCP configuration:
 }
 ```
 
+### 3. Install the Browser Extension
+
+The extension delivers the widget to any tab with a single toggle — no changes to your project's files. Ask Claude to run the `setup_extension` tool, which opens the extension folder and shows instructions, or install manually:
+
+#### Chrome
+
+1. Navigate to `chrome://extensions`
+2. Enable **Developer Mode** (toggle in top right)
+3. Click **Load unpacked**
+4. Select the `extension/` folder from this repository
+
+#### Firefox
+
+1. Navigate to `about:debugging#/runtime/this-firefox`
+2. Click **Load Temporary Add-on...**
+3. Select `extension/manifest.json` from this repository
+
 ## Usage
 
 ### Basic Workflow
 
-Tell Claude you want to show it something in the browser:
+Turn the widget on for your app's tab via the extension:
+
+1. Click the extension icon in your browser toolbar
+2. Toggle the widget ON for the current tab — the "Add annotation" button appears without any file changes
+3. Toggle OFF to cleanly remove the widget
+
+The extension connects to the MCP server at `http://localhost:9877` by default (configurable in the popup) and auto-matches the tab to your Claude Code session by project URL.
+
+Then tell Claude you want to show it something:
 
 ```
 You: There's a bug with the checkout button, let me show you
 
-Claude: I'll install the feedback widget and wait for your annotation.
-
-        [Calls: install_widget]
-        ✅ Widget installed in public/index.html
-
-        [Calls: wait_for_browser_feedback]
-        Please refresh your browser. You'll see an "Add annotation" button.
-        Click it, then click on the problematic element.
+Claude: [Calls: wait_for_browser_feedback]
+        Click "Add annotation" in your browser, then click on the
+        problematic element.
 
 --- You use the browser widget to select the button ---
 
@@ -117,42 +137,11 @@ The widget works without a server connection. When offline, feedback is stored l
 - **Export Markdown** - Click "Pending" to open the queue, then "Export Markdown" to download a `.md` file
 - **Create GitHub Issue** - Click "Create GitHub Issue" to open a pre-filled issue in your browser (you'll be prompted for the repository on first use, stored in localStorage)
 
-## Browser Extension
-
-Instead of modifying project HTML files, you can use the browser extension to toggle the widget on any tab.
-
-### Installation
-
-#### Chrome
-
-1. Navigate to `chrome://extensions`
-2. Enable **Developer Mode** (toggle in top right)
-3. Click **Load unpacked**
-4. Select the `extension/` folder from this repository
-
-#### Firefox
-
-1. Navigate to `about:debugging#/runtime/this-firefox`
-2. Click **Load Temporary Add-on...**
-3. Select `extension/manifest.json` from this repository
-
-Or ask Claude to run the `setup_extension` tool, which opens the folder and shows instructions.
-
-### Usage
-
-1. Click the extension icon in your browser toolbar
-2. Toggle the widget ON for the current tab
-3. The feedback widget appears without any file changes
-4. Toggle OFF to cleanly remove the widget
-
-The extension connects to the MCP server at `http://localhost:9877` by default. You can change the server URL in the extension popup.
-
 ## Available MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `install_widget` | Auto-inject the widget script into your app's HTML |
-| `uninstall_widget` | Remove the widget when done |
+| `setup_extension` | Help install the browser extension (opens folder + instructions) |
 | `wait_for_browser_feedback` | Block until user submits single feedback |
 | `wait_for_multiple_feedback` | Wait for multiple feedback items (user clicks Done when finished) |
 | `get_pending_feedback` | Get any feedback that's been submitted |
@@ -160,59 +149,22 @@ The extension connects to the MCP server at `http://localhost:9877` by default. 
 | `delete_pending_feedback` | Delete a specific pending feedback item by ID |
 | `get_connection_status` | Check if browser clients are connected |
 | `request_annotation` | Prompt the user to annotate something specific |
-| `get_widget_snippet` | Get the script tag for manual installation |
 | `open_in_browser` | Open project URL in default browser (auto-detects from config files) |
-| `setup_extension` | Help install the browser extension (opens folder + instructions) |
+| `install_widget` | **Deprecated** — auto-inject the widget script into your app's HTML |
+| `uninstall_widget` | **Deprecated** — remove the injected widget script |
+| `get_widget_snippet` | **Deprecated** — get the script tag for manual installation |
 
-### install_widget Options
+### Script Installation (deprecated)
 
-```javascript
-{
-  // Optional: specific file path (auto-detects if not provided)
-  "file_path": "public/index.html",
+> **Deprecated:** Script installation modifies your project's HTML, which produces git noise and risks accidental commits. Use the browser extension instead. This path is kept only for environments where installing a browser extension is genuinely blocked, and will be removed in a future major release ([#48](https://github.com/itk-dev/mcp-claude-code-browser-feedback/issues/48)).
 
-  // Optional: project directory to search
-  "project_dir": "/path/to/project",
-
-  // Optional: only load on allowed hostnames (default: true)
-  "dev_only": true,
-
-  // Optional: hostnames/patterns allowed when dev_only is true
-  // Supports '*' wildcard (e.g., '*.local.itkdev.dk')
-  // Defaults to: localhost, 127.0.0.1, *.local, *.local.*, *.test, *.dev, *.ddev.site
-  "allowed_hostnames": ["localhost", "*.local.itkdev.dk"]
-}
-```
-
-**Auto-detection** searches these common locations:
-- `index.html`
-- `public/index.html`
-- `src/index.html`
-- `app/index.html`
-- `dist/index.html`
-- `build/index.html`
-- `www/index.html`
-- `static/index.html`
-
-### Manual Installation (Alternative)
-
-If you prefer manual control, add this script tag to your HTML:
+Add this script tag to your HTML:
 
 ```html
 <script src="http://localhost:9877/widget.js"></script>
 ```
 
-Or for development-only loading:
-
-```html
-<script>
-  if (location.hostname === 'localhost') {
-    const s = document.createElement('script');
-    s.src = 'http://localhost:9877/widget.js';
-    document.body.appendChild(s);
-  }
-</script>
-```
+The `install_widget` / `uninstall_widget` tools still automate injecting and removing the tag (with hostname gating via `dev_only` / `allowed_hostnames` and auto-detection of common entry points like `public/index.html`), and `get_widget_snippet` returns the tag with your session ID.
 
 ## Widget Features
 

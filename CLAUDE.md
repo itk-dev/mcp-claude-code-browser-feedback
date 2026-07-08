@@ -67,19 +67,21 @@ Each Claude Code process generates a unique `SESSION_ID` (UUID). All feedback st
 
 ## MCP Tools
 
+The browser extension is the primary widget delivery path; the script-injection tools below are deprecated (Phase 1 of #48) and slated for removal in the next major release.
+
 | Tool | Purpose |
 |------|---------|
-| `install_widget` | Auto-inject widget script into HTML file. Supports `allowed_hostnames` parameter for custom dev domains (e.g., `*.local.itkdev.dk`) |
-| `uninstall_widget` | Remove widget script from HTML file |
+| `setup_extension` | Open extension directory and show Chrome/Firefox install instructions |
 | `wait_for_browser_feedback` | Block until user submits feedback (default 5min timeout) |
 | `get_pending_feedback` | Get already-submitted feedback without blocking |
 | `get_connection_status` | Check WebSocket client connections |
 | `request_annotation` | Broadcast prompt to connected browsers asking user to annotate |
-| `get_widget_snippet` | Get manual installation script tag |
 | `open_in_browser` | Open project URL in default browser (auto-detects from .env, docker-compose.yml, etc.) |
-| `setup_extension` | Open extension directory and show Chrome/Firefox install instructions |
+| `install_widget` | **Deprecated.** Auto-inject widget script into HTML file. Supports `allowed_hostnames` parameter for custom dev domains (e.g., `*.local.itkdev.dk`) |
+| `uninstall_widget` | **Deprecated.** Remove widget script from HTML file |
+| `get_widget_snippet` | **Deprecated.** Get manual installation script tag |
 
-### install_widget Parameters
+### install_widget Parameters (deprecated)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
