@@ -895,18 +895,21 @@
   }
 
   function getTruncatedSelector(el, maxDepth = 2) {
+    // Stop at the element's own document root so selectors terminate
+    // correctly for elements inside iframes.
+    const rootEl = el.ownerDocument?.documentElement || document.documentElement;
     const parts = [];
     let current = el;
     let depth = 0;
     let hasMore = false;
 
-    while (current && current !== document.documentElement && depth < maxDepth) {
+    while (current && current !== rootEl && depth < maxDepth) {
       parts.unshift(getElementSelector(current));
       current = current.parentElement;
       depth++;
     }
 
-    if (current && current !== document.documentElement) {
+    if (current && current !== rootEl) {
       hasMore = true;
     }
 
@@ -914,20 +917,83 @@
   }
 
   function getFullSelector(el) {
+    const rootEl = el.ownerDocument?.documentElement || document.documentElement;
     const parts = [];
     let current = el;
-    while (current && current !== document.documentElement) {
+    while (current && current !== rootEl) {
       parts.unshift(getElementSelector(current));
       current = current.parentElement;
     }
     return parts.join(' > ');
   }
 
-  function getElementInfo(el) {
+  // Resolve the element under a point, descending into same-origin iframes.
+  // Cross-origin iframes throw on contentDocument access — the iframe element
+  // itself is returned as fallback.
+  function deepElementFromPoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    while (el && el.tagName === 'IFRAME') {
+      let doc;
+      try {
+        doc = el.contentDocument;
+      } catch {
+        break;
+      }
+      if (!doc) break;
+      const rect = el.getBoundingClientRect();
+      const inner = doc.elementFromPoint(
+        x - rect.left - el.clientLeft,
+        y - rect.top - el.clientTop
+      );
+      if (!inner) break;
+      el = inner;
+    }
+    return el;
+  }
+
+  // Bounding rect translated to top-window viewport coordinates, accumulating
+  // offsets of any iframes the element is nested in.
+  function getScreenRect(el) {
     const rect = el.getBoundingClientRect();
-    const styles = window.getComputedStyle(el);
-    
+    let top = rect.top;
+    let left = rect.left;
+    let win = el.ownerDocument?.defaultView;
+    while (win && win !== window && win.frameElement) {
+      const frame = win.frameElement;
+      const frameRect = frame.getBoundingClientRect();
+      top += frameRect.top + frame.clientTop;
+      left += frameRect.left + frame.clientLeft;
+      win = win.parent;
+    }
+    return { top, left, width: rect.width, height: rect.height };
+  }
+
+  // The iframe element hosting el, or null when el is in the top document
+  // (or the frame is unreachable).
+  function getHostFrame(el) {
+    const win = el.ownerDocument?.defaultView;
+    if (!win || win === window) return null;
+    try {
+      return win.frameElement;
+    } catch {
+      return null;
+    }
+  }
+
+  function getElementInfo(el) {
+    const rect = getScreenRect(el);
+    const styles = (el.ownerDocument?.defaultView || window).getComputedStyle(el);
+
+    const hostFrame = getHostFrame(el);
+    const frame = hostFrame
+      ? {
+          url: el.ownerDocument.location?.href || null,
+          selector: getFullSelector(hostFrame),
+        }
+      : null;
+
     return {
+      frame,
       tagName: el.tagName.toLowerCase(),
       id: el.id || null,
       className: el.className || null,
@@ -1023,7 +1089,7 @@
 
       // If a target element is provided, crop to its bounding rect + padding
       if (targetElement) {
-        const rect = targetElement.getBoundingClientRect();
+        const rect = getScreenRect(targetElement);
         const padding = 50;
 
         const sx = Math.max(0, rect.left - padding);
@@ -1439,12 +1505,12 @@
       
       // Get element under cursor (temporarily hide overlay)
       overlay.style.pointerEvents = 'none';
-      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const el = deepElementFromPoint(e.clientX, e.clientY);
       overlay.style.pointerEvents = 'auto';
-      
+
       if (el && !el.closest(`#${WIDGET_ID}`)) {
         hoveredElement = el;
-        const rect = el.getBoundingClientRect();
+        const rect = getScreenRect(el);
         
         highlight.style.display = 'block';
         highlight.style.top = rect.top + 'px';
@@ -1457,7 +1523,7 @@
 
         // Position tooltip above element, or below if it would go off-screen
         if (rect.top - 40 < 0) {
-          tooltip.style.top = (rect.bottom + 8) + 'px';
+          tooltip.style.top = (rect.top + rect.height + 8) + 'px';
         } else {
           tooltip.style.top = (rect.top - 40) + 'px';
         }
@@ -1478,26 +1544,31 @@
       showPanel();
     });
 
+    // Escape to cancel annotation mode or close panels. Returns true if consumed.
+    function handleEscape(e) {
+      const panel = getEl(`${WIDGET_ID}-panel`);
+      if (panel && panel.classList.contains('active')) {
+        e.stopPropagation();
+        hidePanel();
+        return true;
+      }
+      if (isPendingQueueOpen) {
+        e.stopPropagation();
+        closeQueuePanel();
+        return true;
+      }
+      if (isAnnotationMode) {
+        e.stopPropagation();
+        stopAnnotationMode();
+        return true;
+      }
+      return false;
+    }
+
     // Global keyboard shortcuts
     function onDocumentKeydown(e) {
-      // Escape to cancel annotation mode or close panels
       if (e.key === 'Escape') {
-        const panel = getEl(`${WIDGET_ID}-panel`);
-        if (panel && panel.classList.contains('active')) {
-          e.stopPropagation();
-          hidePanel();
-          return;
-        }
-        if (isPendingQueueOpen) {
-          e.stopPropagation();
-          closeQueuePanel();
-          return;
-        }
-        if (isAnnotationMode) {
-          e.stopPropagation();
-          stopAnnotationMode();
-          return;
-        }
+        if (handleEscape(e)) return;
       }
 
       // Shift+C to start annotation mode
@@ -1521,8 +1592,11 @@
     _listeners.onDocumentKeydown = onDocumentKeydown;
     document.addEventListener('keydown', onDocumentKeydown);
 
-    // Prevent keyboard events from leaking to host page when widget is active
+    // Prevent keyboard events from leaking to host page when widget is active.
+    // Escape must be handled here too: stopping propagation would otherwise keep
+    // it from ever reaching onDocumentKeydown when focus sits inside the shadow root.
     function onShadowRootKeydown(e) {
+      if (e.key === 'Escape' && handleEscape(e)) return;
       const panel = getEl(`${WIDGET_ID}-panel`);
       const panelIsOpen = panel && panel.classList.contains('active');
       if (panelIsOpen || isAnnotationMode || isPendingQueueOpen) {
@@ -1614,7 +1688,7 @@
     // Show confirmed-selection highlight on the selected element
     if (selectedElement) {
       const highlight = getEl(`${WIDGET_ID}-highlight`);
-      const rect = selectedElement.getBoundingClientRect();
+      const rect = getScreenRect(selectedElement);
       highlight.style.top = `${rect.top}px`;
       highlight.style.left = `${rect.left}px`;
       highlight.style.width = `${rect.width}px`;
