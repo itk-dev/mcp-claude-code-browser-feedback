@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- The script-injection install path — `install_widget`, `uninstall_widget`, `get_widget_snippet` and the manual `<script>` tag workflow — is deprecated in favor of the browser extension (`setup_extension`). The tools remain functional but log a deprecation notice; removal is planned for the next major release (#48).
+
 ### Security
 
 - The `session_invalid` WebSocket message no longer lists registered session IDs, closing a session-enumeration vector for clients connecting with an unknown session (#50).

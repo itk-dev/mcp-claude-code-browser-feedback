@@ -804,7 +804,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "install_widget",
         description:
-          "Automatically install the feedback widget into a web application by injecting the script tag into an HTML file. Supports auto-detection of common entry points (index.html, etc.) or a specific file path.",
+          "Deprecated — prefer the browser extension (setup_extension). Automatically install the feedback widget into a web application by injecting the script tag into an HTML file. Supports auto-detection of common entry points (index.html, etc.) or a specific file path.",
         inputSchema: {
           type: "object",
           properties: {
@@ -833,7 +833,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "uninstall_widget",
         description:
-          "Remove the feedback widget from a web application by removing the injected script tag.",
+          "Deprecated — prefer the browser extension (setup_extension). Remove the feedback widget from a web application by removing the injected script tag.",
         inputSchema: {
           type: "object",
           properties: {
@@ -852,7 +852,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "get_widget_snippet",
         description:
-          "Get the HTML snippet to add to a web app for browser feedback collection. Use install_widget instead for automatic installation.",
+          "Deprecated — prefer the browser extension (setup_extension). Get the HTML snippet to add to a web app for browser feedback collection.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -999,12 +999,19 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
+// Phase 1 of #48: the script-injection install path is deprecated in favor of
+// the browser extension. Notice goes to stderr only — tool responses stay clean.
+function warnDeprecatedTool(name) {
+  console.error(`[browser-feedback-mcp] DEPRECATED: ${name} is deprecated and will be removed in a future major release. Prefer the browser extension — run the setup_extension tool (see #48).`);
+}
+
 // Handle tool calls
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   switch (name) {
     case "install_widget": {
+      warnDeprecatedTool(name);
       const devOnly = args?.dev_only !== false; // Default true
       const projectDir = args?.project_dir || process.cwd();
       let filePath = args?.file_path;
@@ -1172,6 +1179,7 @@ Next steps:
     }
 
     case "uninstall_widget": {
+      warnDeprecatedTool(name);
       const projectDir = args?.project_dir || process.cwd();
       let filePath = args?.file_path;
       
@@ -1271,6 +1279,7 @@ Next steps:
     }
 
     case "get_widget_snippet": {
+      warnDeprecatedTool(name);
       const snippet = `<script src="http://localhost:${PORT}/widget.js?session=${SESSION_ID}"></script>`;
       const instructions = `
 Add this script tag to your web application's HTML (typically before </body>):
