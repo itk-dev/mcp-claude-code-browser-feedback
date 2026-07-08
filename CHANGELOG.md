@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Element selection now descends into same-origin iframes (including nested ones), so individual elements inside an iframe can be annotated instead of the whole frame. Feedback for such elements includes the frame's URL and selector. Cross-origin iframes still fall back to selecting the iframe itself.
+- End-to-end widget test (`npm run test:e2e`) driving annotation mode in headless Chromium, covering iframe selection and Escape handling.
+
 ### Fixed
+
+- Escape again cancels annotation mode (and closes panels) when focus is inside the widget, e.g. right after starting selection by clicking the widget button.
 
 - Proxy MCP sessions now stay registered with whichever process currently owns the HTTP server. Previously a proxy registered only once at startup, so when the port owner changed (the original owner stopped listening and a later process took over the port) the proxy became invisible in `/sessions` — causing the browser extension to route every tab to the single surviving session. Proxies now re-register on a 30s heartbeat and immediately re-register and retry when a request reveals the owner doesn't recognize the session.
 

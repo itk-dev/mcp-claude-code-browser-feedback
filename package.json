@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "node tests/e2e/widget.e2e.mjs"
   },
   "repository": {
     "type": "git",
@@ -38,6 +39,7 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "playwright-core": "^1.61.1",
     "vitest": "^4.1.4"
   }
 }
