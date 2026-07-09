@@ -6,13 +6,7 @@ import crypto from "node:crypto";
 // Ensures reconnecting the same project reuses the same session ID.
 export function deriveSessionId(projectDir) {
   const hash = crypto.createHash('sha256').update(projectDir).digest('hex');
-  return [
-    hash.slice(0, 8),
-    hash.slice(8, 12),
-    hash.slice(12, 16),
-    hash.slice(16, 20),
-    hash.slice(20, 32),
-  ].join('-');
+  return hash.slice(0, 32).replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-');
 }
 
 // UUID format validation for session IDs
@@ -37,63 +31,30 @@ export function getPendingSummary(pending) {
 
 // Detect project URL from configuration files
 export function detectProjectUrl(projectDir) {
+  const ensureHttps = (value) =>
+    /^https?:\/\//.test(value) ? value : `https://${value}`;
+
+  const envPatterns = [
+    /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
+    /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
+  ];
+  const dockerPatterns = [
+    /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
+    /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
+  ];
+
+  // Order matters — first file with a match wins (detection precedence).
   const detectionStrategies = [
-    {
-      file: '.env',
-      patterns: [
-        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    {
-      file: '.env.local',
-      patterns: [
-        /^(?:APP_URL|BASE_URL|SITE_URL|PROJECT_URL|HOSTNAME)=["']?([^"'\s]+)["']?/m,
-        /^(?:VIRTUAL_HOST|COMPOSE_DOMAIN)=["']?([^"'\s]+)["']?/m,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    {
-      file: 'docker-compose.yml',
-      patterns: [
-        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
-    {
-      file: 'docker-compose.override.yml',
-      patterns: [
-        /VIRTUAL_HOST[=:]\s*["']?([^"'\s]+)["']?/,
-        /traefik\.http\.routers\.[^.]+\.rule[=:]\s*["']?Host\(`([^`]+)`\)["']?/,
-      ],
-      transform: (match) => {
-        const value = match[1];
-        if (!value.startsWith('http://') && !value.startsWith('https://')) {
-          return `https://${value}`;
-        }
-        return value;
-      },
-    },
+    ...['.env', '.env.local'].map((file) => ({
+      file,
+      patterns: envPatterns,
+      transform: (match) => ensureHttps(match[1]),
+    })),
+    ...['docker-compose.yml', 'docker-compose.override.yml'].map((file) => ({
+      file,
+      patterns: dockerPatterns,
+      transform: (match) => ensureHttps(match[1]),
+    })),
     {
       file: 'package.json',
       patterns: [
